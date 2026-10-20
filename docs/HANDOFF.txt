@@ -1,0 +1,2078 @@
+================================================================================
+ Domain Firewall 浏览器插件
+ 使用说明书 · 构建说明书 · 开发交接文档
+ 版本 2.5      （manifest.json 的 version = "2.5"，package.json 的 version = "2.5.0"）
+================================================================================
+
+【如何阅读本文档】
+
+  本文档分三部分，按身份挑着读即可：
+
+    第一部分  使用说明书   给"使用插件的人"：怎么装、怎么用、出问题怎么办。
+    第二部分  构建说明书   给"打包 / 发布插件的人"：怎么从源码构建出可安装的包。
+    第三部分  开发交接文档 给"改代码的人"（包括接手的 LLM）：契约、状态机、数据模型、
+                           跨浏览器差异、已知的坑、测试记录。
+
+  只想马上用起来的话，先看下面的"三分钟上手"。
+
+【三分钟上手（已经有源码，想构建出 Chrome / Edge / Opera / Firefox 四个浏览器的安装包）】
+
+    1) 安装依赖                 npm install
+    2) 下载过滤列表（只需一次） 见第 10 节，把两个 .txt 放进 filters/ 目录
+    3) 一条命令构建并分包       npm run release
+    4) 拿成品                   release/packages/   每个浏览器一个整包：解压后有扩展文件夹和安装说明，
+                                                    直接发给用户即可，用户什么都不用另外安装
+                                release/store/      上传各商店 / 提交 Firefox 签名用的纯扩展包
+    5) 自己先试一下（可选）     Chrome / Edge / Opera：加载文件夹  dist/chrome（或 dist/edge、dist/opera）
+                                Firefox：about:debugging → 临时载入  dist/firefox/manifest.json
+
+  最终用户的安装门槛取决于你怎么分发（详见 12.6、14.0）：
+    - Chrome / Edge / Opera：整包解压后用"加载已解压的扩展"安装，需要开启开发者模式；
+      想要"点一下就装"，就上架商店（Chrome 网上应用店可设为"不公开"，Edge 加载项可设为"隐藏"，
+      只有拿到链接的人能装）；
+    - Firefox：必须是 Mozilla 签名的 .xpi，签名后用户拖进浏览器即可（12.7）。
+
+  第 2 步的过滤列表是"构建产物 rules/*.json"的原料。如果只是想先看看插件能不能跑，
+  可以不下载，改用第 10.3 节的"占位规则集"（一个只含一条规则的小文件）；构建时会提醒你
+  这样的包没有广告拦截效果，不要对外发布。
+
+  注意：icons/、rules/、dnr-converter.bundle.js 都是【构建产物】，源码压缩包里通常没有，
+  必须先 npm run build 才能加载（npm run release 和 npm run package 都已经包含这一步）。
+
+【目录】
+
+  第一部分  使用说明书
+     1. 这是什么
+     2. 支持的浏览器与版本
+     3. 安装（Chrome / Edge / Opera / Firefox）与权限检查
+     4. 快速上手
+     5. 功能详解
+        5.1 三种工作模式与"同站"的含义
+        5.2 白名单
+        5.3 元素拾取与高级模式
+        5.4 广告规则集（EasyList / AdGuard Base）
+        5.5 自定义规则（批量导入）
+        5.6 日志与记录模式、隐私保护
+        5.7 规则预算（份额）
+        5.8 临时规则有效期（TTL）
+     6. 常见问题与排错
+     7. 隐私与数据说明
+
+  第二部分  构建说明书
+     8. 环境要求
+     9. 项目结构与依赖安装
+    10. 准备过滤列表
+    11. 构建产物（npm run build）
+    12. 预构建与分包（npm run release / npm run dist）
+    13. 在各浏览器加载构建结果 / 开发调试流程
+    14. 发布到各应用商店与 Firefox 签名
+    15. 更新数据（过滤列表、公共后缀表、依赖、图标）
+    16. 版本发布清单
+    17. 构建故障排查
+
+  第三部分  开发交接文档
+    18. 一句话定位
+    19. 运行环境与硬约束
+    20. 跨浏览器兼容设计（Chromium vs Firefox）
+    21. 文件结构与职责矩阵
+    22. 数据模型（唯一真相源）
+    23. 模式状态机
+    24. 核心控制流
+    25. 关键函数索引
+    26. 消息与端口协议
+    27. 已知限制与"不要踩的坑"
+    28. 常见扩展任务 → 改动指引
+    29. 调试与验证清单
+    30. 最小验证脚本
+    31. 测试记录（验证了什么、没验证什么）
+    32. 变更记录
+
+
+================================================================================
+ 第一部分  使用说明书
+================================================================================
+
+--------------------------------------------------------------------------------
+ 1. 这是什么
+--------------------------------------------------------------------------------
+
+  Domain Firewall 是一个"按域名放行"的浏览器插件。
+
+  默认（拦截模式）下，它只允许一个网页与下面三类地址通信，其余第三方的"子资源"请求
+  （脚本、图片、样式、字体、XHR/fetch、WebSocket、iframe 等）一律阻断：
+
+    (a) 这个网页自己所属的站点，包括它的所有子域名；
+    (b) 你加入白名单的域名；
+    (c) 网页本身的顶层导航（点链接、地址栏跳转不会被拦）。
+
+  举例：你在访问 www.example.com
+    - 页面引用 static.example.com/app.js        → 放行（同一站点的子域名）
+    - 页面引用 cdn.other.com/lib.js             → 阻断（第三方）
+    - 你把 other.com 加入白名单后               → cdn.other.com/lib.js 放行
+    - 你点击页面里的链接跳到 other.com           → 放行（顶层导航不拦）
+
+  除了防火墙本身，还附带：
+    - 记录模式：不拦截，只把页面发出的所有请求记下来，帮你找出"该放行哪些域名"；
+    - 元素拾取：像开发者工具那样点选页面元素并隐藏，可选同时拦截它的网络请求；
+    - 广告规则集：内置 EasyList / AdGuard Base 两个静态规则集，可勾选启用；
+    - 自定义规则：批量导入 EasyList 语法的规则；
+    - 规则预算管理：浏览器对动态规则总数有上限，插件把额度分池管理，避免互相挤占。
+
+  代价：拦截第三方子资源意味着依赖第三方 CDN / 字体 / 统计脚本的网站可能显示不全。
+  这是设计如此，用白名单修复即可（见 5.2 与第 4 节）。
+
+--------------------------------------------------------------------------------
+ 2. 支持的浏览器与版本
+--------------------------------------------------------------------------------
+
+  浏览器            说明
+  ----------------  --------------------------------------------------------------
+  Chrome            推荐 121 及以上。已在真实 Chromium 中做过完整的端到端测试。
+  Edge              Chromium 内核，使用与 Chrome 相同的包。未实机测试。
+  Opera             Chromium 内核，使用与 Chrome 相同的包。未实机测试。
+  Firefox           140 及以上（使用事件页 + 单独的 manifest）。仅做过模拟环境验证，
+                    未在真实 Firefox 中测试，详见第 31 节。
+
+  为什么推荐 Chrome 121+：浏览器对"动态规则"的数量上限在 Chrome 120/121 起从 5,000
+  提高到 30,000（Firefox 从 128 起相同）。更老的版本插件仍能运行，但预算份额是按
+  30,000 计算的，规则一多就会写入失败。
+
+  Firefox 最低 140 的原因：manifest 里声明的 data_collection_permissions 需要 140+；
+  事件页（121+）和 30,000 条动态规则（128+）也都在此之前。
+
+--------------------------------------------------------------------------------
+ 3. 安装与权限检查
+--------------------------------------------------------------------------------
+
+  前提：你手里已经有构建好的成品（第二部分教你怎么构建）。成品有两种形态：
+      release/packages/domain-firewall-2.5-<浏览器>-package.zip
+                                        整包：解压后有 extension/（扩展本体）和 INSTALL.txt（该浏览器的
+                                        安装说明）。<浏览器> = chrome / edge / opera / firefox
+      dist/chrome/  dist/edge/  dist/opera/  dist/firefox/
+                                        各浏览器的扩展目录，可以直接"加载已解压的扩展"
+  下面步骤里的"选择文件夹 dist/xxx"，指的就是这样的扩展目录；如果你拿到的是整包，就选整包解压出来的
+  extension 文件夹（要选到能直接看见 manifest.json 的那一层）。
+
+  【3.1  Chrome】
+    1) 地址栏输入 chrome://extensions
+    2) 打开右上角的"开发者模式"
+    3) 点"加载已解压的扩展程序"，选择文件夹  dist/chrome
+    4) 点工具栏的拼图图标，把 Domain Firewall 固定到工具栏（可选，方便点击）
+    说明：开发者模式加载的扩展，Chrome 每次启动可能提示"停用开发者模式扩展程序"，
+          点"保留"即可。这是 Chrome 对所有未上架扩展的统一提示。
+
+  【3.2  Edge】
+    1) 地址栏输入 edge://extensions
+    2) 打开"开发人员模式"开关
+    3) 点"加载解压缩的扩展"，选择文件夹  dist/edge
+
+  【3.3  Opera】
+    1) 地址栏输入 opera://extensions
+    2) 打开右上角的"开发者模式 / 开发人员模式"
+    3) 点"加载已解压的扩展程序"，选择文件夹  dist/opera
+    4) 在扩展图标菜单里把 Domain Firewall 固定到工具栏
+
+  【3.4  Firefox】
+    临时加载（测试用，关闭 Firefox 后失效）：
+    1) 地址栏输入 about:debugging#/runtime/this-firefox
+    2) 点"临时载入附加组件…"，选择 dist/firefox/manifest.json（或 firefox 的 zip）
+    长期使用（需要 Mozilla 签名，二选一）：
+    A) 到 addons.mozilla.org 开发者中心提交 firefox 的 zip，选择"自行分发（unlisted）"，
+       审核签名后下载 .xpi 安装（详见第 14 节）；
+    B) 使用 Firefox Developer Edition / Nightly / ESR，在 about:config 里把
+       xpinstall.signatures.required 设为 false，再在 about:addons 的齿轮菜单里选
+       "从文件安装附加组件…"（正式版 Firefox 不允许这样做）。
+    注意：manifest.firefox.json 里的 gecko.id 目前是占位值 domain-firewall@example.com，
+          提交签名前请改成你自己的唯一 ID（见第 14 节）。
+
+  【3.5  权限检查（重要）】
+    插件申请了"访问所有网站"（<all_urls>）的权限。它的用途要分开看：
+      - 拦截（防火墙、广告规则集、自定义规则、拾取的网络拦截）：不依赖这个权限；
+      - 记录模式（观察所有请求）和元素拾取（往网页里注入脚本）：必须有这个权限。
+    两类浏览器的默认情况不同：
+      - Chrome / Edge / Opera：默认已授予。但如果你在扩展详情里把"网站访问权限"改成了
+        "点击时"，就等于收回了。恢复方法：扩展管理页 → Domain Firewall 的"详情" →
+        "网站访问权限" → 选"在所有网站上"。
+      - Firefox：默认不授予。恢复方法：about:addons → Domain Firewall → "权限"标签 →
+        打开"访问所有网站的数据"。
+    如果权限缺失，点开插件弹窗会看到一条黄色警告"未授予「所有网站」访问权限"，里面有
+    "授予权限"按钮；按钮点击无效时（Firefox 的弹窗里请求权限可能被浏览器吞掉），
+    请按上面的路径手动开启。
+
+  【3.6  更新与卸载】
+    - 更新：重新构建后，在扩展管理页点该扩展卡片上的"刷新"按钮；然后【刷新已经打开的网页】
+      （浏览器不会自动更新已打开页面里的脚本，否则"拾取"会提示你刷新）。
+    - 卸载：在扩展管理页移除即可。设置、日志、拾取记录都保存在浏览器本地存储里，
+      卸载时一并删除。
+
+  【3.7  不想开启开发者模式？】
+    开发者模式只是"扩展没有上架商店"时的办法。如果发布者把扩展放到了商店或提供了签名文件，
+    用户点一下就能装：
+      - Chrome：Chrome 网上应用店。发布者可把可见性设为"不公开"：不出现在搜索结果里，
+        但拿到链接的人点"添加到 Chrome"就能安装；
+      - Edge：Microsoft Edge 加载项，可见性可设为"隐藏"，分享链接即可；
+      - Opera：Opera 附加组件站；Opera 也可以通过它的"安装 Chrome 扩展"附加组件从
+        Chrome 网上应用店安装（以 Opera 当前说明为准）；
+      - Firefox：拿到 Mozilla 签名的 .xpi，拖进窗口并点"添加"。
+    发布者怎么做见第 14.0 节。
+
+--------------------------------------------------------------------------------
+ 4. 快速上手
+--------------------------------------------------------------------------------
+
+  1) 点工具栏上的 Domain Firewall 图标。顶部状态条会显示当前模式，默认是
+     "拦截模式：仅允许页面自身站点（含子域名）及白名单通信"。
+  2) 随便打开一个网站。如果页面样式错乱、图片 / 视频缺失、按钮点了没反应，
+     多半是它依赖的第三方域名被拦了。
+  3) 找出该放行哪个域名：
+       a. 在弹窗里把"模式"切到"记录"；
+       b. 刷新出问题的页面，等它加载完；
+       c. 点弹窗最下面的"查看日志 · 拾取记录 · 预算"，打开设置页；
+       d. 在"日志"里看 URL 列表，找到你认为属于页面正常功能的域名
+          （可在"过滤 URL 或域名"框里搜索）；
+       e. 回到弹窗，在"白名单"输入框里填入这个域名，点"添加"；
+       f. 把模式切回"拦截"，刷新页面验证。
+  4) 想隐藏页面上某个烦人的元素（广告位、悬浮框）：点"拾取页面元素并隐藏"，
+     用鼠标点选，确认即可（见 5.3）。
+  5) 排查完记得切回"拦截"。记录模式会让浏览器对每个请求都通知一次插件，
+     只建议排查时短时间使用。
+
+--------------------------------------------------------------------------------
+ 5. 功能详解
+--------------------------------------------------------------------------------
+
+【5.1  三种工作模式与"同站"的含义】
+
+  弹窗里的"模式"有三个选项：
+
+    拦截（默认）  启用防火墙。浏览器内置的规则引擎在后台判断每一个请求，几乎没有性能开销。
+    记录          不拦截任何东西，只把请求记录下来，用于排查（见 5.6）。
+    关闭          防火墙和日志都关闭。
+
+  重要：广告规则集（5.4）、自定义规则（5.5）、元素拾取产生的网络拦截（5.3）是独立的，
+  不随"模式"开关。也就是说，即使切到"关闭"，已启用的广告规则集仍然生效。
+
+  "同站"是怎么判断的：
+    - 每个请求，都以【发起这个请求的那个页面】为基准来判断，而不是以你当前正在看的标签页为基准；
+    - 如果请求的目标域名与发起页面属于同一个"可注册域名"（也叫 eTLD+1，如 example.com、
+      example.co.uk），就是同站，放行（它的所有子域名都算同站）；
+    - 否则是第三方：目标域名在白名单里就放行，不在就阻断；
+    - 顶层导航（main_frame）永远放行。
+    - 这个判断由浏览器内核完成，所以多个标签页同时开着也互不影响。
+
+  例子（页面 → 请求目标 → 结果）：
+    www.example.com   → static.example.com     同站，放行
+    www.example.com   → cdn.other.com          第三方，除非白名单有 other.com
+    shop.example.co.uk→ img.example.co.uk      同站（co.uk 是公共后缀，example.co.uk 才是站点）
+    foo.co.uk         → bar.co.uk              不同站（co.uk 是公共后缀）
+    localhost         → 127.0.0.1              不同站（浏览器把它们当成两个不同的主机）
+    a.github.io       → b.github.io            通常视为不同站（github.io 在公共后缀表里），
+                                               具体以浏览器实现为准，建议实测
+
+【5.2  白名单】
+
+  位置：弹窗中部的"白名单"。
+
+  输入：域名、带端口的域名、带路径的网址、完整 URL 都可以，插件会自动取出主机名。
+        例如  cdn.example.com  /  https://cdn.example.com:8443/a/b?x=1  效果相同。
+        中文域名会自动转成 punycode（形如 xn--fiqs8s.com）后保存和显示。
+
+  生效粒度（按你填的写，不会自动升级成根域名）：
+        example.com        → example.com 及它的全部子域名（www.、cdn.、tracker. 都放行）
+        cdn.example.com    → 只放行 cdn.example.com 及其子域名；
+                             www.example.com、tracker.example.com 不在其内
+
+  会被拒绝的输入（并在弹窗里用红色提示说明）：
+        - 公共后缀本身：co.uk、com.cn、github.io、blogspot.com 等
+          （加进去会放行整个后缀下面成千上万个无关站点）
+        - 只有一个标签的主机名（如 localhost，没有点）
+        - IPv6 地址
+        - 含空格、@、下划线，或标签首尾是连字符（-bad.com）的写法
+        - 单个标签超过 63 个字符、整体超过 253 个字符
+
+  范围：白名单对所有标签页全局生效。
+  删除：条目右侧有"删除"按钮。
+  注意：白名单只是让防火墙那一条规则"不拦"这些域名；它【不会】覆盖广告规则集、自定义规则
+        或拾取规则的拦截——这些是独立的规则，该拦的仍然会拦。
+
+【5.3  元素拾取与高级模式】
+
+  元素拾取：点选页面元素并让它消失。完整流程：
+
+    1) 在弹窗里点"拾取页面元素并隐藏"。仅 http / https 页面可用（chrome://、
+       about: 等内部页面不支持，按钮会置灰）。弹窗随后自动关闭。
+    2) 鼠标变成手型，鼠标移到哪个元素上，哪个元素就会被蓝色框高亮，并在旁边显示
+       "宽 × 高  标签#id.class"。
+    3) 点击你想隐藏的元素，页面右下角弹出"元素拾取"面板：
+         - 显示生成的 CSS 选择器；
+         - 选择器下方显示"匹配 N 个元素"：N 大于 1 时用红色警告"将全部隐藏"，
+           按钮也会变成"隐藏 N 个元素"；N 达到 10 个及以上，点确认时还会再问一次；
+         - 选得不对：按键盘 ↑ 选中它的父元素，按 Esc 退出拾取。
+    4) 如果这个元素带有 src / href 等网址，面板里会出现复选框
+       "高级模式下同时拦截此元素的 URL 请求"：
+         - 需要先在弹窗里打开"高级模式"开关；没开的话复选框是灰色的，并提示
+           "未开启高级模式，此项暂不可用"；
+         - 勾选后，除了隐藏元素，还会生成一条针对该网址（前缀匹配）的网络拦截规则。
+    5) 点"隐藏元素"（或"隐藏 N 个元素"）确认；"取消"则放弃。
+    6) 页面右下角会弹出一条小提示：
+         成功（且勾选了网络拦截）→ "已隐藏元素，并拦截该 URL 的网络请求"
+         网络拦截没写进去 → "元素已隐藏，但网络请求拦截失败：原因"
+                          （常见原因：规则预算已满、该 URL 无法生成规则）
+         保存失败 → "元素已在本页隐藏，但保存失败……刷新后会恢复显示"
+
+  生效范围与时长：
+    - 元素隐藏按站点（该主机名及其子域名）永久生效，直到你在设置页删除记录；
+    - 网络拦截部分有有效期，默认 24 小时（可在设置页改，见 5.8），到期自动释放；
+      元素隐藏不受影响。
+
+  管理：设置页的"元素拾取记录"列出站点、选择器、网络拦截 URL、剩余时间、状态，并提供：
+        删除        永久移除，并释放对应的网络拦截规则（需刷新页面才会让元素重新显示）
+        停用 / 启用 暂时关掉 / 重新打开这条记录
+        重新拦截    网络拦截已到期时出现，重新申请一条拦截并重置有效期
+
+  提示：扩展重载 / 更新后，已经打开的网页里仍是旧的脚本。此时点"拾取"会提示你刷新页面。
+
+【5.4  广告规则集（EasyList / AdGuard Base）】
+
+  位置：设置页的"广告过滤规则集"，切换后立即生效。
+    EasyList       基础广告过滤（推荐），默认启用
+    AdGuard Base   更激进的广告与跟踪器过滤，默认关闭
+
+  说明：
+    - 规则集是构建时从过滤列表转换出来的静态规则，随插件版本更新；要更新规则需要重新
+      构建并安装新版本（见第 15 节）；
+    - 不随"模式"开关；
+    - 两个同时启用可能超过浏览器的静态规则总量上限，启用会失败。EasyList 转换后接近
+      28,000 条，建议只开一个；
+    - 转换后的规则只包含"拦截 / 放行 / 升级 https"这几类安全动作；重定向、改请求头
+      这类规则在静态规则集里不被支持，构建时已剔除。
+
+【5.5  自定义规则（批量导入）】
+
+  位置：设置页的"自定义过滤规则"。
+
+  用法：在文本框里粘贴规则，每行一条，EasyList / Adblock Plus 语法。例如：
+
+      ||ads.example.com^$third-party
+      @@||cdn.example.com^
+      ! 以感叹号开头的是注释，会被忽略
+
+  点"批量导入"。规则、限制与行为：
+    - 单批最多 500 行，超过会被拒绝；
+    - 注释行（!）、[Adblock Plus] 文件头、空行、完全重复的行会被自动忽略；
+    - 一行可能生成多条浏览器规则（预算按实际条数计）；
+    - 以下类型无法用 MV3 的规则引擎表达，会被拒绝并记入失败清单：$replace、$jsonprune、
+      $popup、DNS 相关修饰符等；元素隐藏规则（含 ## 的行）不是网络规则，不会产生
+      拦截效果，请改用"元素拾取"；
+    - 默认是宽松模式：转换失败或预算不足的行被跳过并记录，其余行照常写入；
+      勾选"原子模式（任一行失败则整批回滚）"则只要有一行失败就整批都不写入；
+    - 去重：同样的规则再次导入会被识别为"去重"，不会重复占用额度；
+    - 进度：导入过程中有进度条，可点"取消"；转换阶段取消立即生效；
+    - 恢复：如果导入中途后台被浏览器回收或你关闭了页面，下次打开设置页顶部会出现
+      "有上次未完成的批次"横幅，可点"恢复"从断点继续，或"丢弃"。这个进度只保存在
+      浏览器会话里，重启浏览器后失效。
+
+  结果与管理：
+    - "上次导入结果"展示成功 / 去重 / 转换失败 / 预算拒绝的明细；
+    - "批次"表列出每次导入（时间、总行数、成功、去重、转换失败、预算拒绝），可删除整批；
+    - "规则明细"表列出每一行规则（规则文本、生成的规则数、状态），可单条删除；
+    - 删除时如果浏览器那边释放失败，该条会标红，再点一次删除即可重试。
+
+【5.6  日志与记录模式、隐私保护】
+
+  使用：弹窗切到"记录" → 正常浏览 → 设置页的"日志"。
+  日志表列：时间、方法、类型、状态、URL、详情（点开可看请求头、响应头、请求体）。
+  工具：类型下拉（全部类型 / main_frame / script / image …）、"过滤 URL 或域名"搜索框、
+        "刷新"、"导出 JSON"（文件名 domain-firewall-logs-时间戳.json）、"清空"。
+  容量：最多保留最近 800 条，超出后丢弃最旧的。每条请求体最多保留 8000 个字符。
+
+  隐私保护（默认开启，存到本地之前先脱敏）：
+    - URL 查询参数里的敏感值：token、code、key、sig、signature、sid、ticket、state，
+      以及名字里含 pass / secret / auth / cookie / session / jwt / otp 等的参数，
+      值会被替换成 [redacted]，其余参数和路径原样保留；
+    - 请求头 / 响应头：Authorization、Proxy-Authorization、Cookie、Set-Cookie、
+      X-Api-Key、X-Auth-Token、X-CSRF-Token、X-XSRF-Token 的值被遮掉；
+    - 请求体：表单和 JSON 里敏感字段的值被遮掉；无法识别格式的文本（多行文本、XML 等）
+      不保存内容，只记录长度；二进制内容只记录字节数；
+    - 这是"按字段名"的尽力而为的遮蔽，不能保证覆盖所有情形——不要把导出的日志随意发给别人。
+
+  开关（目前没有界面，需要在后台控制台里执行一行，控制台打开方式见 6 的 Q10）：
+      chrome.storage.local.set({ recordRequestBody: false })   // 完全不保存请求体
+      chrome.storage.local.set({ redactUrl: false })           // 不遮 URL 查询参数
+
+  已知边界：
+    - 日志先写内存缓冲再批量落盘，浏览器突然退出时最近几十条（约 0.1 秒窗口）可能丢失；
+    - 后台被浏览器休眠后再次被导航唤醒时，被唤醒的那一次顶层导航请求本身可能漏记。
+
+【5.7  规则预算（份额）】
+
+  背景：浏览器允许扩展写入的"动态规则"总数有上限（约 30,000 条）。插件把这笔额度分成
+  四个池，防止某一类规则把额度占光：
+
+    CORE       防火墙自己的规则（只有 1 条）                默认 15%
+    CUSTOM     你导入的自定义规则                           默认 15%
+    TRANSIENT  元素拾取产生的临时网络拦截                   默认 30%
+    RESERVE    永久预留，不分配给任何功能                   默认 40%
+
+  位置：设置页"预算份额（高级设置）"。四个池的百分比都可以改，总和不得超过 100%，
+  RESERVE 至少 5%，不合法的输入会被拒绝。点"保存份额"后账本会重建，"恢复默认"回到上表。
+  "当前账本快照"可展开查看每个池的已用 / 上限。
+  什么时候需要调：导入自定义规则时提示"预算拒绝（pool_full）"，说明 CUSTOM 池满了，
+  可以适当调高它的百分比。
+
+【5.8  临时规则有效期（TTL）】
+
+  位置：设置页"TRANSIENT 规则 TTL"。单位小时，范围 0.1 ~ 720（最长 30 天），默认 24。
+    - 修改只影响之后新建的拾取网络拦截，已存在的不变；
+    - "立即清理过期规则"会马上释放已到期的规则；不手动点的话，后台每 5 分钟检查一次，
+      所以到期后最多延迟约 5 分钟才会真正释放；
+    - TTL 只作用于网络拦截，元素隐藏不受影响。
+
+--------------------------------------------------------------------------------
+ 6. 常见问题与排错
+--------------------------------------------------------------------------------
+
+  Q1  网页样式错乱 / 图片缺失 / 视频播不了？
+      这是拦截模式的正常副作用：页面依赖的第三方域名被阻断了。用第 4 节的方法在记录模式下
+      找出域名并加入白名单；急着用也可以临时把模式切到"关闭"。
+
+  Q2  登录、支付、验证码出问题？
+      顶层跳转不会被拦，但登录页里嵌入的 iframe、脚本、接口请求属于第三方子资源，可能被拦。
+      同样用记录模式找到相关域名（如认证服务、支付网关、验证码服务）并加入白名单。
+
+  Q3  "拾取页面元素并隐藏"按钮是灰的，或点了提示要刷新页面？
+      - 按钮灰：当前是 chrome://、about:、扩展页等内部页面，不支持拾取；
+      - 提示刷新：扩展刚重载 / 更新过，已打开的网页里的脚本是旧的，按 F5 刷新后再点；
+      - 提示"尚未授予「所有网站」访问权限"：见 3.5。
+
+  Q4  弹窗里出现黄色的"未授予「所有网站」访问权限"？
+      见 3.5。拦截不受影响，但记录模式和元素拾取不可用。
+
+  Q5  添加白名单时红色提示"请输入有效域名"？
+      见 5.2 的"会被拒绝的输入"。最常见的是填了公共后缀（co.uk）或只有一个标签（localhost）。
+
+  Q6  记录模式下日志是空的？
+      依次检查：模式确实是"记录"；已授予"所有网站"权限（Q4）；点日志的"刷新"；
+      页面确实有网络请求；日志的类型过滤框没有选中某一类型。
+
+  Q7  导入自定义规则全部失败？
+      - "转换器未加载"：构建时没有生成 dnr-converter.bundle.js，运行 npm run build:converter；
+      - 规则用了 $replace / $jsonprune / $popup 等不支持的修饰符（见 5.5）；
+      - "预算拒绝"：CUSTOM 池满了（见 5.7）；
+      - Firefox：转换器依赖 WebAssembly，目前未在真实 Firefox 里验证（第 31 节）。
+
+  Q8  广告规则集勾选了却没效果？
+      确认勾选的是你想要的那个；同时勾选两个可能超限导致启用失败（5.4）；规则集只拦截
+      能被转换成静态规则的那部分，覆盖率不可能是 100%。
+
+  Q9  为什么页面跳转到广告落地页没被拦住？
+      顶层导航按设计一律放行，插件只拦子资源。
+
+  Q10 怎么打开"后台控制台"（查看日志、执行命令、排查问题）？
+      Chrome / Edge / Opera：扩展管理页 → Domain Firewall 的"详情"/卡片 → 点
+        "Service Worker"（或"检查视图 service worker"）链接；
+      Firefox：about:debugging#/runtime/this-firefox → 找到 Domain Firewall → 点"检查"。
+      打开后在 Console 里可以执行第 30 节的检查命令。
+
+  Q11 怎么恢复出厂设置？
+      在后台控制台执行  chrome.storage.local.clear()  ，然后在扩展管理页点刷新。
+      如需同时清理已写入的动态规则：
+        const rs = await chrome.declarativeNetRequest.getDynamicRules();
+        await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: rs.map(r => r.id) });
+
+  Q12 会拖慢浏览器吗？
+      拦截模式只有一条规则，由浏览器内核匹配，开销很小。记录模式会让浏览器对每个请求
+      都回调一次插件，网页多时有可感知的开销，用完请切回"拦截"。
+
+  Q13 Firefox 临时加载的扩展重启后没了？
+      临时载入的扩展只在本次运行有效，见 3.4 的长期安装方式。
+
+--------------------------------------------------------------------------------
+ 7. 隐私与数据说明
+--------------------------------------------------------------------------------
+
+  - 插件不向任何服务器发送数据，没有遥测、没有统计、没有账号。
+    （manifest 里 Firefox 版声明 data_collection_permissions = none。）
+  - 所有数据只存在你浏览器本地的扩展存储里：模式、白名单、日志、拾取记录、预算设置、
+    自定义规则与批次记录。
+  - 记录模式下日志会包含你访问过的网址和请求信息，已按 5.6 做了脱敏，但仍属敏感数据；
+    导出的 JSON 文件由你自己保管。
+  - 清除方式：设置页"清空"（日志）、逐条删除记录，或第 6 节 Q11 的整体清除，
+    或直接卸载扩展。
+
+
+================================================================================
+ 第二部分  构建说明书
+================================================================================
+
+  本部分面向"拿到源码、要自己构建出可安装包"的人。源码里有一部分文件是【构建产物】
+  （图标 PNG、静态规则集、规则转换器），它们不手写、不手改，必须通过命令生成。
+
+--------------------------------------------------------------------------------
+ 8. 环境要求
+--------------------------------------------------------------------------------
+
+  - Node.js 18 或更高（推荐 20 / 22 LTS）。用 node -v 查看。
+      原因：构建脚本是 ES 模块（.mjs，含顶层 await，使用 node: 前缀的内置模块）；
+      scripts/build-psl.mjs 的 --fetch 选项使用 Node 18+ 自带的 fetch。
+  - npm 9 或更高（随 Node 安装）。
+  - 操作系统：Windows 10/11、macOS、Linux 均可。下文命令以 Windows 的 cmd 为主，
+    PowerShell / macOS / Linux 有差异的地方会单独标出。
+  - 网络：只有 npm install 和下载过滤列表 / 公共后缀表时需要联网，构建本身不联网。
+  - 不需要：C/C++ 编译器、Python、Java、Docker、无头浏览器。
+      @resvg/resvg-js 自带各平台的预编译二进制，图标渲染不依赖浏览器。
+  - 磁盘：node_modules 约几十到一百多 MB；构建产物约 5～15 MB（主要是 rules/*.json）。
+
+--------------------------------------------------------------------------------
+ 9. 项目结构与依赖安装
+--------------------------------------------------------------------------------
+
+  【9.1  项目结构】（标注：[源码] 手写；[构建] 命令生成；[手动] 需要自己准备）
+
+    domain-firewall/
+    ├── manifest.json               [源码] Chromium 版 manifest（Chrome / Edge / Opera）
+    ├── manifest.firefox.json       [源码] Firefox 版"补丁"：合并到 manifest.json 上得到
+    │                                      Firefox 版 manifest（见 12.4）
+    ├── background.js               [源码] 核心逻辑。Chromium 中是 service worker，
+    │                                      Firefox 中是事件页
+    ├── budget-manager.js           [源码] 规则预算账本
+    ├── content.js                  [源码] 内容脚本：元素拾取、隐藏样式注入
+    ├── popup.html / popup.js       [源码] 工具栏弹窗
+    ├── options.html / options.js   [源码] 设置页
+    ├── psl.js                      [源码+生成] 公共后缀判断；"PSL DATA"数据块由
+    │                                      scripts/build-psl.mjs 生成，其余手写
+    ├── package.json                [源码] 依赖与脚本
+    ├── package-lock.json           [源码] 依赖锁定（请提交到版本库）
+    ├── icons/
+    │   ├── icon.svg                [源码] 图标源文件
+    │   └── icon{16,32,48,128}.png  [构建] npm run build:icons
+    ├── filters/
+    │   ├── easylist.txt            [手动] 原始过滤列表（见第 10 节）
+    │   └── adguard-base.txt        [手动]
+    ├── rules/
+    │   ├── easylist.json           [构建] npm run build:rules
+    │   └── adguard-base.json       [构建]
+    ├── dnr-converter.bundle.js     [构建] npm run build:converter
+    ├── scripts/
+    │   ├── build-icons.mjs         icon.svg → icon*.png
+    │   ├── converter-entry.mjs     esbuild 入口（只导出 Filter / FilterConverter）
+    │   ├── build-converter.mjs     打包转换器
+    │   ├── build-rules.mjs         过滤列表 → 静态规则集
+    │   ├── build-psl.mjs           更新 psl.js 里的公共后缀数据
+    │   └── build-dist.mjs          预构建 + 分包：四个浏览器各一份；--release 生成发布包
+    ├── signed/                     [手动，可选] Mozilla 签名后的 .xpi（文件名含版本号，见 12.7）
+    ├── node_modules/               npm install 生成
+    ├── dist/                       npm run dist 生成
+    │   ├── chrome/  edge/  opera/  firefox/      各浏览器的扩展目录
+    │   └── domain-firewall-<版本>-<浏览器>.zip    商店上传 / 提交签名用的纯扩展包
+    └── release/                    npm run release 生成（给最终用户的成品，见 12.6）
+        ├── packages/               每个浏览器一个整包（extension/ + INSTALL.txt）
+        ├── store/                  商店上传包汇总
+        └── SHA256SUMS.txt、RELEASE.txt
+
+  注意文件名：转换器产物叫 dnr-converter.bundle.js（bundle 前面是【点】）。manifest、
+  background.js 都按这个名字引用。如果你看到的是 dnr-converter_bundle.js（下划线），
+  那是文件在传输 / 上传过程中被改了名，运行 npm run build:converter 会重新生成正确的名字。
+
+  【9.2  依赖】
+    package.json 里只有 devDependencies（构建期工具），插件运行时没有任何 npm 依赖：
+      @adguard/dnr-converter   ^2.0.0   EasyList 规则 → 浏览器 DNR 规则（2.x API）
+      @adguard/re2-wasm        ^1.0.0   转换器需要的正则引擎（WebAssembly）
+      @resvg/resvg-js          ^2.6.2   SVG → PNG
+      esbuild                  ^0.21.0  把转换器打成单文件
+
+  【9.3  安装】
+    在项目根目录执行：
+        npm install
+    有 package-lock.json 时，想得到和上次完全一致的依赖版本可以用 npm ci；
+    如果它提示 lock 与 package.json 不同步，改用 npm install。
+
+--------------------------------------------------------------------------------
+ 10. 准备过滤列表
+--------------------------------------------------------------------------------
+
+  【10.1  为什么需要手动准备】
+    scripts/build-rules.mjs 只负责"转换"，不负责"下载"。列表的来源和版本由你控制，
+    这样同一份输入永远得到同一份规则集，构建结果可复现、可审计。
+
+  【10.2  下载】
+    需要两个文件：
+        filters/easylist.txt        https://easylist.to/easylist/easylist.txt
+        filters/adguard-base.txt    https://filters.adtidy.org/extension/chromium/filters/2.txt
+
+    Windows cmd（Windows 10 1803 以上自带 curl.exe）：
+        mkdir filters
+        curl -L -o filters\easylist.txt https://easylist.to/easylist/easylist.txt
+        curl -L -o filters\adguard-base.txt https://filters.adtidy.org/extension/chromium/filters/2.txt
+
+    Windows PowerShell（注意：PowerShell 里的 curl 是 Invoke-WebRequest 的别名，参数不同，
+    要么写成 curl.exe，要么用下面的写法）：
+        mkdir filters
+        Invoke-WebRequest -Uri https://easylist.to/easylist/easylist.txt -OutFile filters\easylist.txt
+        Invoke-WebRequest -Uri https://filters.adtidy.org/extension/chromium/filters/2.txt -OutFile filters\adguard-base.txt
+
+    macOS / Linux：
+        mkdir -p filters
+        curl -L -o filters/easylist.txt https://easylist.to/easylist/easylist.txt
+        curl -L -o filters/adguard-base.txt https://filters.adtidy.org/extension/chromium/filters/2.txt
+
+    （mkdir 提示目录已存在时直接忽略即可。浏览器直接打开链接另存为也一样。）
+
+  【10.3  只想先试试：占位规则集】
+    如果暂时不想下载列表，可以手动创建下面两个文件，内容都是同一行（一条无害的规则），
+    之后正常运行 npm run build 和 npm run dist 即可：
+        rules/easylist.json
+        rules/adguard-base.json
+    内容：
+        [{"id":1,"priority":1,"action":{"type":"block"},"condition":{"urlFilter":"||ads.invalid^","resourceTypes":["script"]}}]
+    说明：
+      - 缺少 filters/*.txt 时，npm run build:rules 只会打印"跳过缺失的过滤列表"并正常结束，
+        不会动 rules/ 里已有的文件，所以占位文件会保留；
+      - 占位规则集没有任何广告拦截效果，【只用于开发试跑，不要发布】；
+      - 如果既没有 filters/*.txt 也没有 rules/*.json，npm run dist 会报错并列出缺少的文件
+        （浏览器也会因为 manifest 引用了不存在的规则文件而拒绝加载扩展）。
+
+  【10.4  建议】
+    把下载日期和来源记到发布说明里（第 16 节）。向 Firefox 商店提交时，审核人员需要
+    能复现构建，会用到这些信息（第 14 节）。
+
+--------------------------------------------------------------------------------
+ 11. 构建产物（npm run build）
+--------------------------------------------------------------------------------
+
+  npm run build 依次运行三个脚本，也可以单独运行：
+
+      npm run build:icons        图标
+      npm run build:converter    规则转换器
+      npm run build:rules        静态规则集
+      npm run build              以上三个依次执行
+
+  【11.1  build:icons】
+    输入  icons/icon.svg
+    输出  icons/icon16.png、icon32.png、icon48.png、icon128.png（透明背景）
+    做法  用 @resvg/resvg-js 渲染，纯 Rust 实现，不依赖浏览器。
+    日志  每个尺寸一行：[build-icons] .../icon16.png (N bytes)，最后"完成"。
+    想改图标：编辑 icons/icon.svg 后重新运行本命令。想加尺寸：改脚本里的 SIZES 并同步
+    manifest.json 的 icons。
+
+  【11.2  build:converter】
+    输入  scripts/converter-entry.mjs（只导出 @adguard/dnr-converter 的 Filter 和
+          FilterConverter，减小体积）
+    输出  dnr-converter.bundle.js（单文件，IIFE，暴露全局变量 DnrConverter）
+    做法  esbuild：format=iife、globalName=DnrConverter、platform=browser、
+          target=chrome120、loader 的 .wasm 设为 binary（把 WASM 以内联形式打进文件）、
+          压缩、无 sourcemap。
+    体积  通常 500 KB ～ 1.5 MB。
+    用途  插件运行时把"自定义规则"里的 EasyList 文本转换成浏览器规则。依赖 WebAssembly，
+          所以 manifest 的 CSP 里必须保留 'wasm-unsafe-eval'。
+
+  【11.3  build:rules】
+    输入  filters/easylist.txt、filters/adguard-base.txt
+    输出  rules/easylist.json、rules/adguard-base.json
+    做法  1) 用 @adguard/dnr-converter 2.x 转换：converter.convert([filter]) →
+             ruleset.getDeclarativeRules()；
+          2) 剔除静态规则集不支持的规则：redirect / modifyHeaders 动作（不安全动作，
+             留着会导致浏览器拒绝加载整个规则集）以及带 regexFilter 的正则规则；
+          3) 单个规则集最多保留 28,000 条（MAX_RULES_PER_SET），超出部分截断。
+    预期的日志（这些都是正常的，不是错误）：
+          [build-rules] easylist: N 条规则无法转换，已跳过        转换器不能表达的规则
+          [build-rules] easylist: N 条规则受 MV3 限制              同上，功能受限
+          [build-rules] easylist: 移除 N 条 unsafe 规则 / 正则规则
+          [build-rules] easylist: 过滤后 N 条，截断到 28000 条
+          [build-rules] easylist: N 条 DNR 规则 → .../rules/easylist.json
+    结束时会提示总规则数；超过 30,000 会警告（默认只启用 easylist，通常不受影响）。
+    覆盖率永远达不到 100%：$replace、$jsonprune、$hls、DNS 修饰符等无法用 DNR 表达的
+    规则会被跳过。
+
+  【11.4  检查产物】
+    构建完成后，应当存在：
+        icons/icon16.png  icons/icon32.png  icons/icon48.png  icons/icon128.png
+        dnr-converter.bundle.js
+        rules/easylist.json（约 2～5 MB）  rules/adguard-base.json（约 2～5 MB）
+    一条命令检查规则集里没有残留的不安全动作和正则（cmd / PowerShell / bash 均可粘贴）：
+
+        node -e "const fs=require('fs'); for(const f of ['rules/easylist.json','rules/adguard-base.json']){const r=JSON.parse(fs.readFileSync(f,'utf8')); const u=r.filter(x=>x.action&&(x.action.type==='redirect'||x.action.type==='modifyHeaders')); const rx=r.filter(x=>x.condition&&x.condition.regexFilter); console.log(f, 'total='+r.length, 'unsafe='+u.length, 'regex='+rx.length);}"
+
+    预期每个文件都输出  unsafe=0 regex=0。不为 0 说明 build-rules.mjs 的过滤逻辑被误删。
+
+--------------------------------------------------------------------------------
+ 12. 预构建与分包（npm run release / npm run dist）
+--------------------------------------------------------------------------------
+
+  "预构建"就是把源码和构建产物整理成"拿去就能装"的成品：全部是纯静态文件，最终用户不需要
+  安装 Node.js、npm 或任何其他软件。Chrome、Edge、Opera、Firefox 四个浏览器各出一个成品。
+
+  【12.1  命令】
+      npm run release           【推荐】npm run build + 四个浏览器的 dist + 发布包 release/
+      npm run package           npm run build + npm run dist（只生成 dist/，不生成 release/）
+      npm run dist              四个浏览器都构建：目录 + 商店上传用 zip
+      npm run dist:chrome       只构建 Chrome（同理 dist:edge、dist:opera、dist:firefox）
+      npm run dist:chromium     = chrome + edge + opera
+    直接调用脚本还可以加选项：
+      node scripts/build-dist.mjs --target chrome,edge       逗号分隔，选择要构建的浏览器
+      node scripts/build-dist.mjs --no-zip                   只要目录，不生成 zip
+      node scripts/build-dist.mjs --release                  生成 release/（必须四个浏览器一起构建）
+    dist 类命令不会运行 npm run build：图标、规则集和转换器要先准备好（第 11 节）。
+
+  【12.2  产物】
+    dist/（每个浏览器一份）
+      dist/chrome/  dist/edge/  dist/opera/  dist/firefox/        解压即用的扩展目录
+      dist/domain-firewall-2.5-<浏览器>.zip                       商店上传 / 提交签名用的纯扩展包
+                                                                   （manifest.json 在 zip 根目录）
+    release/（npm run release 生成，用来发给别人）
+      release/packages/domain-firewall-2.5-<浏览器>-package.zip   给最终用户的整包（见 12.6）
+      release/store/domain-firewall-2.5-<浏览器>.zip              商店上传包的汇总（与 dist/ 里的相同）
+      release/SHA256SUMS.txt                                      以上所有 zip 的校验和
+      release/RELEASE.txt                                         发布摘要：各浏览器的规则集条数、警告
+    <浏览器> 取 chrome / edge / opera / firefox；版本号来自 manifest.json 的 version。
+    zip 内的时间戳是固定值，同样的输入得到字节完全相同的压缩包（RELEASE.txt 里有生成时间，除外）。
+    Chrome / Edge / Opera 三份的扩展文件逐文件相同（Chromium 内核）；分开打包是为了各商店分别
+    提交、安装说明各自准确。Firefox 与它们只有 manifest.json 不同。
+
+  【12.3  脚本做了什么】
+    1) 读取 manifest.json；构建 Firefox 时再合并 manifest.firefox.json（12.4）；
+    2) 校验 manifest 与规则集（12.5）；
+    3) 收集需要打包的文件，规则是：
+         - manifest 里直接引用的文件：图标、弹窗页、设置页、background、content_scripts、
+           declarative_net_request 的规则文件、web_accessible_resources；
+         - 再顺着 HTML 里的 <script src>、<link href>、<img src> 继续找；
+         - 再顺着 JS 里的 importScripts('…') 继续找；
+       所以 psl.js（被 popup.html 引用）、budget-manager.js 和 dnr-converter.bundle.js
+       （被 background.js 的 importScripts 引用）都会被自动带上，而 node_modules、filters、
+       scripts 这些开发文件永远不会进包；
+    4) 只要有任何被引用的文件不存在，就列出文件名并以失败结束（不会打出一个缺文件的包）；
+    5) 复制文件到 dist/<浏览器>/，写入合并后的 manifest.json；
+    6) 生成 zip（纯 Node 实现，无额外依赖）；
+    7) 带 --release 时再生成 release/（12.6）。
+    如果你新增的文件是通过其他方式加载的（例如 fetch(chrome.runtime.getURL('x.json'))），
+    脚本找不到它：把它写进 manifest 的 web_accessible_resources 即可被收集。
+
+  【12.4  各浏览器的 manifest 是怎么得到的】
+    基础是 manifest.json（Chromium 写法）。每个浏览器可以有自己的补丁文件
+    manifest.<浏览器>.json，存在就合并上去：
+      - manifest.firefox.json：已提供；
+      - manifest.chrome.json / manifest.edge.json / manifest.opera.json：可选，当前没有。
+        需要为某个浏览器单独改 manifest（名称、最低版本等）时新建即可，无需改脚本。
+    合并规则：
+      - 对象按键递归合并；数组整体替换；
+      - 值为 null 表示删除这个键；
+      - 以下划线开头的键（如 "_说明"）是注释，不会合并。
+    Firefox 补丁做了两件事：
+      1) background：删除 service_worker，改成
+           scripts: ["budget-manager.js", "dnr-converter.bundle.js", "background.js"]
+         Firefox 的事件页没有 importScripts，依赖脚本必须按顺序列在这里，并且排在
+         background.js 之前；
+      2) 加入 browser_specific_settings.gecko：id、strict_min_version（140.0）、
+         data_collection_permissions（required: ["none"]）。
+    结果：dist/firefox/manifest.json 与 dist/chrome/manifest.json 只有这两处不同，
+    其余文件完全一致。
+
+  【12.5  校验与体检】
+    错误（让构建失败，不会产出残缺的包）：
+      - Chromium 系缺少 background.service_worker，或带有 background.scripts；
+      - Firefox 缺少 background.scripts，或残留 service_worker；
+      - Firefox 的 background.scripts 里 budget-manager.js 缺失或排在 background.js 之后；
+        dnr-converter.bundle.js 排在 background.js 之后；
+      - Firefox 缺少 gecko.id；
+      - 规则集不是合法的 JSON 数组；含 redirect / modifyHeaders 动作或正则规则（浏览器会拒绝
+        加载整个规则集）；单个规则集超过 30,000 条；
+      - 包里混进了不该发布的文件（node_modules/、filters/、scripts/、signed/、dist/、release/、
+        package.json、package-lock.json、README*、*.mjs、*.map、*.md、*.ts）；
+      - 被引用的文件不存在（图标和规则文件请先 npm run build）。
+    警告（不会失败，但提醒你；也会汇总进 release/RELEASE.txt）：
+      - 规则集少于 1000 条：多半是占位规则集（10.3），这样的包没有广告拦截效果，不要对外发布；
+      - 默认启用的规则集合计超过 30,000 条；
+      - gecko.id 仍是占位值 domain-firewall@example.com；缺少 data_collection_permissions；
+      - manifest 的版本与 package.json 的版本不一致；
+      - Chromium 系的 manifest 里带了 browser_specific_settings（会被忽略）。
+
+  【12.6  发布包（release/）：给最终用户的整包】
+    npm run release 为每个浏览器生成一个整包 domain-firewall-<版本>-<浏览器>-package.zip，
+    解压后的结构：
+        domain-firewall-2.5-chrome/
+        ├── INSTALL.txt          该浏览器的安装说明（中文；UTF-8 带 BOM + Windows 换行，记事本直接能看）
+        └── extension/           扩展本体（里面直接能看到 manifest.json）
+    Firefox 的整包里另有一个 .xpi（见 12.7）。
+    INSTALL.txt 针对每个浏览器写了准确的页面路径、开关与按钮名称、权限检查方法、更新与卸载方法，
+    并解释"为什么要开发者模式""怎样可以不用开发者模式"，开头就写明"不需要安装 Node.js 或任何
+    其他软件"。用户只需要：解压 → 按说明操作。
+    想改说明文字：改 scripts/build-dist.mjs 里的 installText() 和 BROWSERS 表。
+    整包里的 extension/ 与商店上传包（release/store/）里的扩展内容逐字节相同。
+    发布前请对整包做一次"用户视角"的验证：解压 → 按 INSTALL.txt 装一遍。
+
+  【12.7  Firefox 的 .xpi 与签名】
+    Firefox 正式版只安装 Mozilla 签名的扩展。流程：
+      1) 把 manifest.firefox.json 里的 gecko.id 改成你自己的（14.4）；
+      2) npm run release，得到 release/store/domain-firewall-<版本>-firefox.zip；
+      3) 在 AMO 开发者中心上传它，选"自行分发（unlisted）"，等自动签名完成，下载签名后的 .xpi；
+      4) 把下载的 .xpi 放进项目的 signed/ 目录，文件名里必须含版本号（如 …-2.5.xpi）；
+      5) 再次 npm run release：Firefox 整包会改为附带这个已签名的 .xpi
+         （domain-firewall-<版本>-firefox.xpi），INSTALL.txt 的措辞也随之改为"拖进浏览器即可安装"。
+         没有找到已签名的 .xpi 时，整包里是未签名的 .xpi（…-firefox-unsigned.xpi），INSTALL.txt
+         会如实说明它在正式版 Firefox 里无法安装，并给出临时载入等替代办法。
+    注意：第 2 步上传签名的那份代码，必须与第 5 步重新构建时的扩展内容一致（源码、版本号在
+    2～5 步之间都不要改动），否则整包里的扩展文件与签名对不上。
+
+--------------------------------------------------------------------------------
+ 13. 在各浏览器加载构建结果 / 开发调试流程
+--------------------------------------------------------------------------------
+
+  加载方式见第 3 节（Chrome 加载 dist/chrome，Edge 加载 dist/edge，Opera 加载 dist/opera；
+  Firefox 临时载入 dist/firefox/manifest.json）。
+
+  【13.1  日常开发循环】
+    1) 改源码；
+    2) 如果改了 filters/、icons/icon.svg、依赖或转换器入口，先对应重新构建（第 11 节）；
+    3) npm run dist（只改 JS/HTML 时直接这一步就够；只想构建一个浏览器可用 npm run dist:chrome 等）；
+    4) 在扩展管理页点刷新（Firefox 临时载入的点"重新载入"）；
+    5) 【刷新已打开的网页】（content script 不会自动更新）；
+    6) 打开后台控制台看有没有报错。
+    开发 Chromium 版时也可以直接加载项目根目录（根目录的 manifest.json 就是 Chromium 版），
+    省掉第 3 步；但前提是根目录里已经有构建产物（icons、rules、dnr-converter.bundle.js），
+    并且这样加载的目录里会混着 node_modules 等开发文件，正式测试请用 dist。
+    Firefox 不能这样做（根目录的 manifest 是 Chromium 写法）。
+
+  【13.2  后台控制台与调试技巧】
+    - Chrome / Edge / Opera：扩展管理页 → Domain Firewall → "Service Worker"链接。
+      Service Worker 空闲约 30 秒会被回收；打开着这个 DevTools 时它不会被回收。
+      想测试"被回收后再被唤醒"的行为，要先关掉这个 DevTools，等它停止，
+      或在 chrome://serviceworker-internals 里手动停止。
+    - Firefox：about:debugging#/runtime/this-firefox → Domain Firewall → "检查"。
+      事件页同样会在空闲后被挂起。
+    - 看存储：在后台控制台执行  await chrome.storage.local.get()
+    - 看规则：await chrome.declarativeNetRequest.getDynamicRules()
+    - 更多检查命令见第 30 节。
+
+  【13.3  可选：web-ext（Firefox 开发工具）】
+    Mozilla 官方的命令行工具，可以自动加载并热重载扩展，也能做静态检查。它不是本项目的
+    依赖，需要时临时用 npx 运行（以下命令在本文档编写时没有机会实际运行过）：
+        npx web-ext lint --source-dir dist/firefox          提交商店前做静态检查，强烈建议
+        npx web-ext run  --source-dir dist/firefox          启动一个带扩展的 Firefox
+
+--------------------------------------------------------------------------------
+ 14. 发布到各应用商店与 Firefox 签名
+--------------------------------------------------------------------------------
+
+  各商店的政策、表单和审核流程会变化，以下仅作准备清单，请以商店当前页面为准。
+
+  【14.0  分发方式对照：用户要不要开启开发者模式？】
+    Chrome
+      免开发者模式：Chrome 网上应用店。可见性可设为"不公开（Unlisted）"：不出现在搜索结果里，
+        但任何拿到商店链接的人都能一键"添加"；也可设为"私有"（受信任测试者 / 同域用户）。
+      不走商店：整包 + 开发者模式 + 加载已解压的扩展。Windows / macOS 的正式版 Chrome 不允许
+        从商店以外安装 .crx 安装包（会提示安装包无效），所以不提供 .crx。
+    Edge
+      免开发者模式：Microsoft Edge 加载项。可见性可设为"隐藏（Hidden）"：不出现在搜索 / 浏览里，
+        分享商店链接即可。
+      不走商店：整包 + 开发人员模式。
+    Opera
+      免开发者模式：Opera 附加组件站（addons.opera.com）。没有查到官方的"不公开 / 私有"发布
+        选项，以 Opera 开发者后台为准；Opera 用户也可以通过它的"安装 Chrome 扩展"附加组件，
+        从 Chrome 网上应用店（含不公开链接）安装（以 Opera 当前说明为准）。
+      不走商店：整包 + 开发者模式 + 加载已解压的扩展（最可靠；.crx 拖放"有时可行"，不要依赖）。
+    Firefox
+      免开发者模式：Mozilla 签名的 .xpi。AMO 的"自行分发"免费签名，用户把 .xpi 拖进窗口并点
+        "添加"即可（12.7）。
+      不签名：只能临时载入（重启失效），或使用 Developer Edition / Nightly / ESR 关闭签名强制。
+    以上信息查自各平台的官方文档与社区资料，商店规则会变，请以官方当前说明为准。
+
+  【14.1  通用准备】
+    - 每次发布前升版本号（第 16 节），商店要求新版本号必须大于已发布的版本；
+    - 准备隐私说明：本插件不收集、不上传任何用户数据（第 7 节）；
+    - 准备权限用途说明，可参考下面的口径：
+        declarativeNetRequest  按域名阻断第三方请求（核心功能）
+        webRequest             记录模式下观察请求（只读，不阻塞、不修改）
+        storage、unlimitedStorage  保存设置、白名单、日志、拾取记录
+        tabs                   读取当前标签页的网址，用于显示域名和判断能否拾取
+        alarms                 定时清理已过期的临时规则
+        host 权限 <all_urls>   在所有网站上观察请求、注入元素拾取脚本
+        CSP 的 'wasm-unsafe-eval'  本地的规则转换器使用 WebAssembly，代码随包分发，
+                               没有任何远程代码
+    - 审核员通常会重点看 <all_urls> 与 webRequest，说明里要讲清楚"为什么需要"。
+
+  【14.2  Chrome 网上应用店】
+    上传 release/store/domain-firewall-<版本>-chrome.zip。需要填写单一用途说明、权限用途、
+    数据使用披露（选择"不收集"）。可见性选"不公开"，就只有拿到链接的人能安装（14.0）。
+
+  【14.3  Edge 附加组件 / Opera 附加组件】
+    Edge 在 Microsoft Partner Center 提交，Opera 在 addons.opera.com 的开发者后台提交，
+    分别上传 release/store/domain-firewall-<版本>-edge.zip 和 …-opera.zip（内容与 chrome 的相同）。
+    Edge 可见性可选"隐藏"（14.0）。两家的具体表单项本文档未实际走过流程。
+
+  【14.4  Firefox（addons.mozilla.org，简称 AMO）】
+    1) 把 manifest.firefox.json 里的 gecko.id 改成你自己的唯一 ID：
+         - 邮箱形式，如 domain-firewall@你的域名.com；或
+         - 花括号 GUID，如 {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}。
+       ID 一旦发布就不要再改，否则会被当成另一个扩展。
+    2) npm run dist:firefox，得到 dist/domain-firewall-<版本>-firefox.zip；
+    3) 提交前先跑  npx web-ext lint --source-dir dist/firefox  处理警告；
+    4) 在 AMO 开发者中心上传 zip，选择：
+         - "在本站上架（listed）"：公开发布，经审核；或
+         - "自行分发（unlisted）"：只做签名，下载得到签名后的 .xpi 自己分发 / 安装，
+           适合个人长期使用。拿到签名后的 .xpi 怎么放进发布包，见 12.7。
+    5) 源码提交：包里含有压缩过的文件（dnr-converter.bundle.js）和生成的文件
+       （psl.js 的数据块、rules/*.json），AMO 审核员会要求提供源码和可复现的构建说明。
+       请提交一份不含 node_modules 和 dist 的源码压缩包，并在备注里写明：
+         - Node 版本；
+         - 构建步骤：npm install → 把过滤列表放进 filters/（给出下载链接和下载日期，
+           第 10 节）→ npm run package；
+         - 指向本文档第二部分。
+    6) strict_min_version 是 140.0（desktop）。data_collection_permissions 已声明为
+       "none"，与第 7 节一致；如果将来增加了任何数据传输功能，必须同步修改。
+
+--------------------------------------------------------------------------------
+ 15. 更新数据（过滤列表、公共后缀表、依赖、图标）
+--------------------------------------------------------------------------------
+
+  【15.1  过滤列表】
+    重新下载（第 10.2 节）→ npm run build:rules → npm run dist → 回归测试 → 发布新版本。
+    规则随插件发版更新，没有运行时在线更新。建议每月或每季度更新一次。
+
+  【15.2  公共后缀表（psl.js）】
+    psl.js 里"PSL DATA BEGIN / END"之间的数据块由脚本生成，其余逻辑是手写的。更新：
+        npm run build:psl -- --fetch                  下载最新官方列表（Node 18+、需联网）
+        npm run build:psl -- --dat 某路径\public_suffix_list.dat    使用本地下载好的官方文件
+        npm run build:psl -- --rules-js node_modules\psl\data\rules.js   使用 npm 包 psl 的数据
+    什么都不带时，会尝试读取 node_modules/psl/data/rules.js（要先 npm i -D psl）。
+    脚本会把 Unicode 规则转成 punycode、去重排序，并保证重复运行结果逐字节一致。
+    更新后的检查：
+        - 在弹窗页的控制台执行  PSL_INFO  看 source / generatedAt / rules 是否符合预期
+          （psl.js 只由 popup.html 加载；可以把 chrome-extension://<扩展ID>/popup.html 在标签页里
+          打开再按 F12）；
+        - getRootDomain('www.bbc.co.uk') 应得 'bbc.co.uk'，getRootDomain('co.uk') 应得 null；
+        - psl.js 里的 EXTRA_SUFFIXES（surge.sh、wordpress.com）是为了保持旧行为而保留的，
+          如果新数据已收录，可以删掉。
+    说明：psl.js 现在只用于弹窗里"拒绝把公共后缀加进白名单"的输入校验；真正判断"同站"的
+    是浏览器自己的规则（第 24.1 节）。
+
+  【15.3  依赖】
+    npm outdated 查看可更新项；npm update 更新（遵守 package.json 里的版本范围）。
+    升级 @adguard/dnr-converter 之后必须：重新 npm run build:converter 和
+    npm run build:rules，并回归测试"自定义规则批量导入"（它用的是 2.x API：
+    convert → ruleset.getDeclarativeRules）。
+
+  【15.4  图标 / 主题色】
+    改 icons/icon.svg 后 npm run build:icons。主题色在 popup.html、options.html 的
+    --brand 变量里（深色模式有独立变量），两处保持一致。
+
+  【15.5  Firefox 的 ID / 最低版本】
+    都在 manifest.firefox.json 里改，改完 npm run dist:firefox。
+
+--------------------------------------------------------------------------------
+ 16. 版本发布清单
+--------------------------------------------------------------------------------
+
+   [ ] 1. 同步修改 manifest.json 的 version 和 package.json 的 version（例如都升到 2.6 / 2.6.0）
+   [ ] 2. 在第 32 节追加变更记录
+   [ ] 3. filters/*.txt 已更新（或确认沿用），记下来源与日期
+   [ ] 4. npm run build 成功；按 11.4 运行检查命令，两个规则集都是 unsafe=0 regex=0
+   [ ] 5. npm run release 成功，没有错误；看一遍 release/RELEASE.txt 里的警告
+          （占位规则集警告 = 包没有广告拦截效果；gecko.id 占位值要在发布前改掉）
+   [ ] 6. 在 Chrome 加载 dist/chrome，后台控制台无报错
+          （无 "转换器未加载" / "WebAssembly compile error" / CSP 违规 / "Could not load icon"）
+   [ ] 7. 在 Edge、Opera 各加载一遍 dist/edge、dist/opera 做冒烟测试
+   [ ] 8. 在 Firefox 加载 dist/firefox，授予"访问所有网站的数据"后做冒烟测试，
+          并特别验证第 31.3 节列出的两个"未验证项"
+   [ ] 9. 跑一遍第 29 节的验证清单（至少：三种模式切换、白名单、拾取、记录、自定义规则导入）
+   [ ] 10. getEnabledRulesets() 返回预期规则集（默认 ['easylist']）
+   [ ] 11. 提交商店；Firefox 附上源码包与构建说明（14.4）
+   [ ] 12. 打 git tag，保存本次的 release/ 整个目录（zip + SHA256SUMS.txt + RELEASE.txt）
+   [ ] 13. 把 release/packages/ 里的某个整包解压，照它的 INSTALL.txt 在对应浏览器里装一遍（用户视角验收）
+
+--------------------------------------------------------------------------------
+ 17. 构建故障排查
+--------------------------------------------------------------------------------
+
+  现象：Cannot find module '@adguard/dnr-converter'（或 esbuild、@resvg/resvg-js）
+    → 还没安装依赖，运行 npm install。
+
+  现象：build:icons 报 ENOENT ... icon.svg
+    → icons/icon.svg 不存在或路径不对。
+
+  现象：build:rules 只打印"跳过缺失的过滤列表"，之后 npm run dist 报
+        "被引用但不存在：rules/easylist.json"
+    → filters/*.txt 没下载（第 10 节），或使用占位规则集（10.3）。
+
+  现象：npm run dist 报"被引用但不存在：icons/icon16.png ..."
+    → 先 npm run build（或至少 npm run build:icons）。
+
+  现象：Chrome 加载时提示 "Could not load icon 'icons/icon16.png'"
+    → 图标没生成，或你加载了没有构建产物的目录。请加载 dist/chrome（Edge 加载 dist/edge，
+      Opera 加载 dist/opera），或整包里的 extension 文件夹。
+
+  现象：Chrome 提示 "Could not load ruleset 'easylist'"、规则文件无法解析
+    → rules/*.json 缺失或损坏；或其中含有 redirect / modifyHeaders 等不安全动作
+      （按 11.4 检查，重新 npm run build:rules）。
+
+  现象：Service Worker 注册失败（Status code: 15）/ 控制台出现 "转换器未加载"
+    → 前者通常是 background.js 有语法错误或 importScripts 的文件缺失；
+      后者说明 dnr-converter.bundle.js 不存在或名字不对（9.1 末尾的文件名说明），
+      运行 npm run build:converter。
+
+  现象：控制台出现 WebAssembly compile error / 违反 Content Security Policy
+    → manifest 的 content_security_policy.extension_pages 必须包含 'wasm-unsafe-eval'。
+
+  现象：Firefox 报 background 相关的 manifest 错误 / "service_worker" 不被支持
+    → 加载了 Chromium 版的 manifest。Firefox 请加载 dist/firefox。
+
+  现象：Firefox 控制台出现 "budget-manager.js 未加载"
+    → manifest 里 background.scripts 缺少它，或顺序错了（12.4）。重新 npm run dist:firefox。
+
+  现象：Firefox 里记录模式 / 元素拾取不工作，弹窗有黄色警告
+    → 没有授予主机权限（3.5）。
+
+  现象：build-psl 报"没有可用的数据源"
+    → 加 --fetch，或 --dat 指定文件，或先 npm i -D psl（15.2）。
+
+  现象：Windows 上路径含中文或空格导致脚本失败
+    → 把项目移到纯英文、无空格的路径下重试。
+
+
+================================================================================
+ 第三部分  开发交接文档
+================================================================================
+
+  面向后续接手的开发者 / LLM。本部分描述当前实现的【契约、状态机、数据模型与已知坑】。
+  修改代码前请先读完第 19、20、23、24、27 节。凡是文中写"必须 / 禁止"的，都是踩过坑或
+  有测试在守着的约束。
+
+--------------------------------------------------------------------------------
+ 18. 一句话定位
+--------------------------------------------------------------------------------
+
+  Manifest V3 浏览器扩展（Chrome / Edge / Opera 用 service worker，Firefox 用事件页）。
+  以【发起请求的页面】为基准，用 declarativeNetRequest 的一条动态规则
+  （domainType: 'thirdParty'）阻断页面对第三方域名的子资源请求（顶层导航放行），
+  全局白名单通过 excludedRequestDomains 排除；叠加静态广告规则集、用户自定义 EasyList
+  规则、元素拾取与 TRANSIENT 临时规则；另提供记录模式（webRequest 观察，不拦截、只落盘）。
+  所有动态 DNR 写入都经过规则预算管理器做分池配额与准入。
+
+--------------------------------------------------------------------------------
+ 19. 运行环境与硬约束
+--------------------------------------------------------------------------------
+
+  Manifest
+      V3。禁止使用阻塞式 webRequest，拦截必须走 declarativeNetRequest。
+
+  后台生命周期
+      Chromium 是 service worker，Firefox 是事件页，两者都会在空闲后被回收。
+      全局变量随时丢失；每次唤醒必须重新执行 applyMode()；预算账本必须从
+      getDynamicRules() 对账重建。
+      【凡是需要"能唤醒后台"的事件监听器，必须在脚本顶层同步注册】，不能放进任何
+      异步回调（否则后台休眠后新事件唤醒不了它）。
+
+  后台脚本加载方式
+      Chromium：classic worker，background.js 用 importScripts 加载
+                budget-manager.js 和 dnr-converter.bundle.js。manifest 里不要加
+                "type": "module"。
+      Firefox ：没有 importScripts，由 manifest 的 background.scripts 按顺序预先加载
+                （见 12.4 与 20 节）。background.js 里用 CAN_IMPORT_SCRIPTS 判断环境。
+
+  CSP
+      extension_pages: script-src 'self' 'wasm-unsafe-eval'; object-src 'self'
+      @adguard/re2-wasm 需要编译 WebAssembly；只放开 WASM，不放开 eval。
+
+  DNR 配额
+      动态规则总数      30,000 条 safe（Chrome 120/121 起、Firefox 128 起；更低版本为 5,000）
+      动态 unsafe 规则  5,000 条（redirect / modifyHeaders）
+      动态 regex 规则   1,000 条（单条编译后须 < 2 KB）
+      静态规则集        每扩展保证 30,000 条 safe；同时启用 ≤ 50 个；总共 ≤ 100 个
+      静态规则集只允许 safe 动作（block / allow / allowAllRequests / upgradeScheme），
+      含 redirect / modifyHeaders 会导致整个规则集加载失败。
+
+  主机权限（<all_urls>）的真实作用
+      - 拦截（block / allow / upgradeScheme）不需要主机权限（Chrome 与 Firefox 都是）；
+      - redirect / modifyHeaders 需要主机权限；
+      - webRequest 观察（记录模式）需要；
+      - content_scripts（元素拾取、隐藏样式注入）需要。
+      因此在 Firefox（主机权限默认不授予）或 Chrome 的"点击时"站点权限下，
+      防火墙仍然工作，但记录模式和拾取不可用——popup 会显示权限警告（24.10）。
+
+  存储
+      chrome.storage.local + unlimitedStorage；chrome.storage.session 用于批量导入进度
+      （不跨浏览器重启）。
+
+  CSS 特性
+      :has()（Chrome 105+、Firefox 121+）、prefers-color-scheme、prefers-reduced-motion。
+      popup / options 用 :has() 做分段滑块，用媒体查询做深色模式和减弱动画。
+
+  权限清单（manifest.json）
+      declarativeNetRequest、tabs、storage、webRequest、unlimitedStorage、alarms，
+      host_permissions: ["<all_urls>"]。删任何一个都会破坏现有功能；新增权限需同步更新
+      本文档和第 14.1 节的权限说明。
+      tabs 权限需要保留：Firefox 里读取标签页 url 需要它（Chrome 里主机权限就够，但两边
+      行为不同）。
+
+  浏览器版本
+      Chrome 推荐 121+；Firefox 140+（strict_min_version，同时满足 data_collection_permissions、
+      事件页、30,000 条动态规则）。
+
+--------------------------------------------------------------------------------
+ 20. 跨浏览器兼容设计（Chromium vs Firefox）
+--------------------------------------------------------------------------------
+
+  【20.1  目标与打包】
+    Chrome / Edge / Opera 属于 Chromium 内核，MV3 支持方式一致：dist/chrome、dist/edge、
+    dist/opera 三份逐文件相同，分开打包是为了各商店分别提交、安装说明各自准确；
+    Firefox 用 dist/firefox，与它们只有 manifest.json 不同
+    （background 与 browser_specific_settings 两处，见 12.4）。同一套源码，不分叉。
+
+  【20.2  已处理的差异】
+    1) 后台声明
+         Chromium: background.service_worker
+         Firefox : background.scripts（事件页）。Firefox 不支持 service_worker。
+         → manifest.firefox.json 补丁 + scripts/build-dist.mjs 合并。
+    2) importScripts
+         事件页里没有 importScripts。background.js 顶部：
+           CAN_IMPORT_SCRIPTS = typeof importScripts === 'function'；
+         是才调用；否则假定依赖已由 manifest 加载。若 BudgetLedger 未定义，打印明确的
+         错误提示（指向 background.scripts）。
+    3) 请求发起者
+         webRequest 的 details.initiator 只有 Chromium 提供；Firefox 提供 originUrl /
+         documentUrl。getInitiator(details) 依次取 initiator → originUrl/documentUrl 的 origin。
+    4) 主机权限模型
+         Firefox 的主机权限默认不授予（用户在 about:addons 里授予）；Chrome 默认授予但可被
+         改成"点击时"。popup 用 chrome.permissions.contains({origins:['<all_urls>']})
+         检测并给出警告与授权入口（24.10）。
+    5) 弹窗里的 alert()
+         Firefox 的浏览器动作弹窗里 alert() 表现不可靠。popup.js 全部改用页内提示
+         showNotice()。content.js 里的 alert()/confirm() 运行在网页上下文，没有这个问题，
+         但网页可以屏蔽对话框，所以关键反馈改用页内 toast。
+    6) CSS 前缀
+         ::-webkit-progress-value 之外补 ::-moz-progress-bar；font-smoothing 补
+         -moz-osx-font-smoothing。<details> 的箭头靠 list-style:none 隐藏，两边通用。
+    7) getDynamicRules 的过滤参数
+         getDynamicRules({ruleIds}) 在某些浏览器里可能被忽略（返回全部规则）。
+         getExistingFirewallRules() 在拿到结果后再按 id 过滤一次。
+
+  【20.3  不需要处理的差异（已核对）】
+    - chrome.* 命名空间：MDN 说明所有主流浏览器在 MV3 里都让异步方法返回 Promise，
+      Firefox 也支持 chrome.*。代码统一使用 chrome.* + await，没有引入 browser.* 或 polyfill。
+    - storage.session、alarms、runtime.onSuspend（已判空）、options_ui.open_in_tab、
+      permissions.onAdded/onRemoved 在两边都可用。
+    - Firefox DNR 的 block 动作无需主机权限；domainType、excludedRequestDomains、
+      csp_report 资源类型、规则 ID 不以下划线开头等，已按 Firefox 的 schema 核对。
+
+  【20.4  给后续开发者的规则】
+    1) 只用 chrome.* 的 Promise 形式，不写回调风格；
+    2) 任何 importScripts 调用必须有 CAN_IMPORT_SCRIPTS 保护，新增依赖脚本时同时更新
+       manifest.firefox.json 的 background.scripts（顺序在 background.js 之前）；
+    3) 需要唤醒后台的监听器一律在顶层同步注册；
+    4) 弹窗里不要用 alert / confirm / prompt；
+    5) 不要依赖 details.initiator，使用 getInitiator()；
+    6) 使用 Chromium 专属 CSS（-webkit-*）时补上 Firefox 对应写法；
+    7) 新增权限要同时考虑 Firefox 的主机权限默认不授予这件事。
+
+  【20.5  Edge / Opera】
+    与 Chrome 共用同一个包。Edge 与 Opera 的扩展管理页路径不同（见第 3 节），其余行为
+    预期一致，但没有实机测试过。
+
+  【20.6  未验证项】见 31.3。
+
+--------------------------------------------------------------------------------
+ 21. 文件结构与职责矩阵
+--------------------------------------------------------------------------------
+
+  文件                      职责（以及"不负责"什么）
+  ------------------------  ------------------------------------------------------------
+  manifest.json             Chromium 版配置：权限、CSP、icons、rule_resources。
+  manifest.firefox.json     Firefox 版补丁（background.scripts、gecko 设置）。
+  background.js ★           全部核心逻辑：状态读写、规则生成、监听器注册 / 注销、拾取记录、
+                            CUSTOM 转换与准入、批次进度、日志聚合与脱敏、消息与端口处理。
+                            不渲染任何 UI。
+  budget-manager.js         BudgetLedger、admitAndApplyInternal、getBudgetSnapshot、
+                            resetBudgetLedger。只负责"能不能写、写多少、ID 从哪来"，
+                            不决定"写什么规则"。
+  psl.js                    getRootDomain(hostname)、PSL_INFO。纯函数、零依赖、不读写
+                            storage、不碰 DNR。现在只被 popup 加载，用于白名单输入校验。
+  content.js                拾取 overlay（F12 风格高亮、尺寸标签、手型指针）、选择器生成、
+                            匹配数量与二次确认、结果 toast、cosmetic 隐藏样式注入、ping 响应。
+                            不写 storage（读 advancedMode）、不碰 DNR。
+  popup.html / popup.js     模式、白名单、高级模式、拾取入口、页内提示、权限警告。
+                            不直接调 declarativeNetRequest。
+  options.html / options.js 日志、拾取记录、预算份额、TTL、规则集开关、CUSTOM 批量导入与
+                            批次管理。不参与拦截逻辑。
+  dnr-converter.bundle.js   [构建] @adguard/dnr-converter 的 esbuild IIFE 产物，勿手改。
+  rules/*.json              [构建] 静态规则集，勿手改。
+  icons/*.png               [构建] 勿手改（改 icon.svg）。
+  scripts/*.mjs             构建脚本，见第 9、11、12、15 节。
+
+  关键解耦规则：
+    1) popup / options 修改 storage → background 的 storage.onChanged 触发动作：
+         mode / whitelist     → applyMode()
+         budgetConfig         → resetBudgetLedger() 后 scheduleRulesUpdate()
+         enabledRulesets      → applyRulesets()
+         recordRequestBody / redactUrl → 更新内存中的开关变量
+       不要在 UI 里直接调 background 的函数。
+    2) 所有 DNR 写操作必须经 dnrQueue；禁止在别处直接调 updateDynamicRules。
+    3) popup 启动拾取前必须先 ping 握手，确认 content script 存活（扩展重载后旧页面里的
+       content script 不会自动更新）。
+    4) popup 里不要用 alert，用 showNotice。
+
+--------------------------------------------------------------------------------
+ 22. 数据模型（唯一真相源）
+--------------------------------------------------------------------------------
+
+  【22.1  chrome.storage.local】
+
+      mode: 'block' | 'record' | 'off'     默认 'block'
+      whitelist: string[]                  默认 []。元素是规范化后的小写主机名
+                                           （IDN 已转 punycode），按所填粒度保存、按所填粒度生效
+      logs: LogEntry[]                     默认 []，上限 MAX_LOGS = 800
+      pickerRules: PickerRecord[]          元素拾取记录
+      advancedMode: boolean                默认 false；true 时拾取可生成网络拦截
+      budgetConfig: null | BudgetConfig    null = 使用 DEFAULT_BUDGET_CONFIG
+      transientTtlMs: number               默认 24 小时；允许范围 1 分钟 ~ 30 天
+      enabledRulesets: string[]            默认 ['easylist']
+      customRules: CustomRuleRecord[]      用户自定义规则（每条对应一行 EasyList 文本）
+      customBatches: CustomBatchRecord[]   批次元信息
+      recordRequestBody: boolean           默认 RECORD_BODY_DEFAULT（true）；false 则不保存请求体
+      redactUrl: boolean                   默认 true；false 则不遮 URL 查询参数的敏感值
+    后两个开关目前没有界面，只能通过后台控制台设置（5.6）。
+
+  【22.2  chrome.storage.session】
+      'batch-progress': BatchProgress | null     批次进度，浏览器重启后清空
+
+  【22.3  结构定义】
+
+    LogEntry（由 handlers 聚合各阶段生成，落盘前已脱敏）
+      { id, timestamp, url, method, type, tabId, frameId, parentFrameId,
+        initiator,        // 发起者 origin，可能为 null（Firefox 由 originUrl 推导）
+        requestBody,      // string | null，已脱敏，截断到 MAX_BODY_CHARS = 8000
+        requestHeaders,   // array | null，敏感头的值为 '[redacted]'
+        responseHeaders,  // array | null，同上
+        statusCode, fromCache, error }
+      error 可能是 onErrorOccurred 的错误，也可能是 'no_terminal_event'
+      （超时清理时写入，见 24.2）。
+
+    PickerRecord
+      { id: 'pick_<ts>_<rand>',
+        hostname,                 // 页面 hostname（匹配用 hostMatches：精确或子域）
+        selector,                 // content.js 生成的 CSS 选择器
+        url: string | null,       // 元素的 src/href/data-src（若可得）
+        dnrRuleIds: number[],     // 已分配的 TRANSIENT ID（空 = 仅隐藏）
+        expiresAt: number | null, // 网络拦截的到期时间戳
+        dnrExpired: boolean,      // 曾经有过、现在已过期 / 已释放
+        createdAt, active }
+
+    CustomRuleRecord
+      { id: 'custom_<ts>_<rand>', batchId, text,
+        dnrRuleIds: number[],     // 该行生成的 CUSTOM ID（一行可能多条）
+        createdAt, active, stale  // stale=true 表示释放失败，需重试 }
+
+    CustomBatchRecord
+      { id: 'batch_<ts>_<rand>', createdAt, totalLines,
+        succeeded, deduped, conversionFailed, budgetRejected,
+        atomic, failures: [...], dedupedLines: [...] }
+
+    BatchProgress（session）
+      { batchId, text, atomic, startedAt, total, current,
+        phase: 'convert' | 'admit',
+        succeeded: [{line, rules}], failed: [{line, reason, errors, limitations?}],
+        cancelled, completed }
+
+    BudgetConfig
+      { CORE:{share,regexShare}, CUSTOM:{...}, TRANSIENT:{...}, RESERVE:{...} }
+      总和须 ≤ 1；RESERVE.share 至少 5%；越界时 normalizeBudgetConfig 回退默认。
+
+  约定：logs 中【最新记录在数组末尾】（push + splice 淘汰头部）；options.js 用
+  [...logs].reverse() 实现"最新在前"。pickerRules、customRules、customBatches 同理。
+
+--------------------------------------------------------------------------------
+ 23. 模式状态机
+--------------------------------------------------------------------------------
+
+  【23.1  三种模式（applyMode() 是唯一入口）】
+
+      模式     CORE 规则              记录监听器           语义
+      -------  ---------------------  -------------------  ------------------------------
+      block    存在 1 条（RULE_ID=1）  未注册               放行同站 + 白名单；顶层导航放行
+      record   已移除                 已注册（5 个事件）    不改变任何网络行为，全量记录
+      off      已移除                 未注册               完全旁路
+
+    触发：onInstalled / onStartup / storage.onChanged（mode 或 whitelist）/ 后台脚本顶层。
+
+  【23.2  与模式正交的开关】
+    - 静态规则集（enabledRulesets）：独立于 block / record / off；由 applyRulesets() 应用，
+      applyMode() 末尾也会调用一次；
+    - 拾取网络拦截（TRANSIENT 池）：与模式无关，按记录的 active 与 expiresAt 生效；
+    - 自定义规则（CUSTOM 池）：同上。
+
+  【23.3  必须遵守的不变式】
+    1) block 与 record 的生效机制互斥，切换时先清理再建立（applyMode 已保证）；
+    2) recordRegistered 只是单次后台生命周期的去重标记，不要持久化；
+    3) 所有 DNR 写操作必须经 dnrQueue，通过 admitAndApplyInternal 完成，禁止绕过预算管理器；
+    4) applyMode() 与"唤醒后补注册监听器"都走 applyQueue，与 DNR 队列相互独立；
+    5) record 模式下再次调用 applyMode()（如白名单变化）不会注销重注册监听器
+       （registerRecordListeners 幂等），所以不会清空进行中的 pendingRequests；
+    6) 日志只能经 enqueueLog() 入队，由 flushLogs() 批量落盘；除"清空"外不得直接
+       set({ logs }) 覆盖；
+    7) 规则 ID 由 BudgetLedger.allocateRuleId(pool) 分配，不要手写 ID（唯一例外是
+       RULE_ID = 1，属于 CORE）；
+    8) removeRuleIds 中的 ID 必须与声明的 pool 一致，否则 admitAndApplyInternal 抛错；
+    9) pickerRules / customRules 的删除必须先释放 DNR、成功后再删记录；释放失败时保留记录
+       （custom 标记 stale），避免留下孤儿规则；
+   10) 扩展重载后已打开页面的 content script 不会自动更新，popup 启动拾取前必须 ping。
+
+--------------------------------------------------------------------------------
+ 24. 核心控制流
+--------------------------------------------------------------------------------
+
+【24.1  拦截规则生成（CORE，经 scheduleRulesUpdate 串行化 + 合并）】
+
+    读取 mode / whitelist
+      ├─ mode !== 'block' → 目标 = 无规则（移除 RULE_ID=1）
+      └─ mode === 'block'
+           目标 = 一条规则：
+             { id: 1, priority: 1, action: { type: 'block' },
+               condition: {
+                 domainType: 'thirdParty',
+                 resourceTypes: [sub_frame, stylesheet, script, image, font, object,
+                                 xmlhttprequest, ping, csp_report, media, websocket, other],
+                 excludedRequestDomains: [规范化后的白名单]   // 白名单为空时整个字段省略
+               } }
+      getExistingFirewallRules() 取出现有的规则 1，用 ruleKey 与目标比较：
+        相同 → 不写（每次 updateDynamicRules 浏览器都会重建整个动态规则集，后台每次唤醒
+               都会走到这里，所以必须跳过空操作）；
+        不同 → admitAndApplyInternal('CORE', { removeRuleIds:[1], addRules })。
+
+    要点：
+    - "是否第三方"由浏览器按【发起请求的页面】判断（同一可注册域名为同站，含所有子域名）。
+      没有任何"当前标签页"的概念，所以：多标签页互不影响、跨域跳转后新页面自己的资源
+      不会被旧页面的状态误拦、不需要监听 tabs 事件。具体对私有后缀（github.io 等）如何处理
+      取决于浏览器内核实现，未逐一实测。
+    - resourceTypes 不含 main_frame：顶层导航放行。
+    - excludedRequestDomains 匹配"该域名及其所有子域名"。白名单按用户输入的粒度保存与生效
+      （cdn.example.com 只放行它自己及子域）。条目由 normalizeWhitelistEntry 规范化：
+      小写、IDN→punycode、去末尾点、拒绝路径 / 端口 / 空白 / IPv6、标签 1~63 字符且首尾
+      为字母数字、整体 ≤ 253。非法条目被忽略，excludedRequestDomains 不能是空数组。
+    - ruleKey 只比较我们写入的字段（id、priority、action.type、condition 里的 domainType /
+      排序后的 excludedRequestDomains / 排序后的 resourceTypes）。给 CORE 规则新增字段时
+      【必须同步更新 ruleKey】，否则新字段的变化不会触发重写。
+    - scheduleRulesUpdate() 做合并：队列里已有"尚未开始"的更新时复用同一个 promise；
+      "正在执行"期间再来的变更会再排一次（这是正确的，避免执行中读到旧状态后漏更新）。
+    - 优先级方案：CORE = 1；TRANSIENT（拾取）= 5000；CUSTOM = 转换器给出的值原样保留
+      （普通规则 ≈ 1，@@ 例外 ≈ 1e5，$important ≈ 1e6，allowAllRequests ≈ 1.4e5）；
+      静态规则集同样来自转换器。浏览器先比优先级，同优先级下 allow 压过 block。
+      因此用户的 @@ 例外（≈1e5）可以放行被 CORE 或拾取规则拦截的请求，这是有意的。
+
+【24.2  记录模式】
+
+    注册：registerRecordListeners() 是 async，先 await ensureRecordConfig()（读取
+    recordRequestBody / redactUrl 两个开关），再注册 5 个监听器（filter 为 <all_urls>）：
+      onBeforeRequest   ['requestBody']
+      onBeforeSendHeaders ['requestHeaders']
+      onHeadersReceived ['responseHeaders']
+      onCompleted、onErrorOccurred
+    用内存 Map pendingRequests（key = requestId）聚合；onCompleted / onErrorOccurred 时
+    finalizeLog(log) 后 enqueueLog(log)。
+
+    唤醒：监听器是在读完配置后才注册的，所以后台休眠后新请求唤醒不了它。解决：在脚本顶层
+    常驻一个只监听 main_frame 的 webRequest.onBeforeRequest（每次顶层导航至多触发一次），
+    回调 ensureRecordState()：若尚未注册且没有正在进行的补注册，就在 applyQueue 里读取模式，
+    模式是 record 则注册完整监听器。代价：唤醒那次导航的 main_frame 请求本身，以及注册完成前
+    的极少数请求可能漏记。
+    不把全部监听器常驻，是因为那样 block / off 模式下每个请求都会唤醒后台。
+
+    脱敏（落盘前）：
+      - finalizeLog：log.url 经 redactUrl()（仅遮敏感参数的值，保留其余原始编码、路径、#hash）；
+        请求头 / 响应头里 SENSITIVE_HEADERS 的值换成 '[redacted]'；
+      - serializeRequestBody：
+          formData → redactDeep（按键名递归脱敏，深度上限 8）；
+          raw → body.raw 的元素是 { bytes?: ArrayBuffer, file?: string }（不是 ArrayBuffer）：
+                bytes 先截到 MAX_BODY_CHARS 字节再 UTF-8 解码；含 NUL 或 U+FFFD 超过 10%
+                判为二进制，只记 '[binary N bytes]'；否则交给 redactBodyText；
+          recordBodyEnabled 为 false 或尚未读到配置时返回 null（失败关闭）。
+      - redactBodyText（失败关闭）：
+          以 { 或 [ 开头 → JSON.parse 后 redactDeep；解析失败（被截断）→ 对
+            "敏感键":"值" 的模式做正则兜底；
+          含 key= 且无换行 → URLSearchParams 逐对脱敏；
+          其他（纯文本、XML、多行）→ '[omitted: unrecognized body format, N chars]'。
+      - 敏感键名：SENSITIVE_KEY_RE（pass/pwd/secret/token/auth/cookie/credential/
+        api|access|private key/session/jwt/otp/cvv/cvc/card number/ssn）；URL 参数另外按
+        整名匹配 code/key/sig/signature/sid/ticket/state（URL_SENSITIVE_RE）。
+      这是尽力而为，不保证覆盖所有格式。
+
+    pendingRequests 清理：sweepStalePendingRequests()——条目超过 5 分钟（PENDING_MAX_AGE_MS）
+    视为"已结束但没收到终止事件"，带 error:'no_terminal_event' 落盘并移除；条目数超过
+    2000（PENDING_MAX_ENTRIES）时按插入顺序淘汰最旧的到 90%。调用点：onBeforeRequest 发现
+    超限时、sweepExpiredTransientRules() 开头。超过 5 分钟的超长请求会被提前落盘一次，
+    之后真正结束时因条目已不在 Map 而被忽略——有意的取舍。
+
+    日志批量写入：
+      enqueueLog(log) → logBuffer.push
+        ├─ 缓冲 >= LOG_FLUSH_MAX(50) → 立即 flushLogs()
+        └─ 否则 scheduleLogFlush()（debounce 100 ms）
+      flushLogs()：flushing 锁；batch = logBuffer.splice(0)；读 logs，push，截断到
+      MAX_LOGS；set；finally 释放锁、有剩余则重新调度；失败时把 batch 放回缓冲头部。
+
+【24.3  标签页事件（已移除）】
+
+    2.4 及以前，CORE 规则依赖"当前标签页的根域名"，所以监听 tabs.onActivated / onUpdated。
+    现在规则按发起页判断，这两个监听已删除。broadcastCosmeticUpdate() 仍然用 tabs.query({})
+    和 tabs.sendMessage 通知各标签页刷新隐藏样式（只需要 tabId，不依赖 url）。
+
+【24.4  规则预算管理器（budget-manager.js）】
+
+    ID 分段（POOL_ID_RANGES）：
+      CORE       1 – 999,999              防火墙（RULE_ID = 1）
+      CUSTOM     1,000,000 – 1,999,999    用户自定义 EasyList 规则
+      TRANSIENT  3,000,000 – 3,999,999    拾取生成的临时规则
+      RESERVE    4,000,000 – 4,999,999    硬预留，不分配
+
+    默认份额（DEFAULT_BUDGET_CONFIG，按 30,000 条算）：
+      CORE       share 0.15 → 4,500    regexShare 0.05 → 50
+      CUSTOM     share 0.15 → 4,500    regexShare 0.70 → 700
+      TRANSIENT  share 0.30 → 9,000    regexShare 0.15 → 150
+      RESERVE    share 0.40 → 12,000   regexShare 0.10 → 100
+    RESERVE 永不分配；canAdmit 硬性要求 totalDynamicUsed + count ≤ totalSafe - reserveCap。
+    份额可由用户覆盖（budgetConfig），normalizeBudgetConfig 做越界保护（clamp 到 [0,1]、
+    RESERVE ≥ 5%、总和 > 1 回退默认）。
+
+    准入契约（admitAndApplyInternal(pool, {addRules, removeRuleIds})）：
+      1) 必须在 dnrQueue 内部调用；本函数自身不排队，避免死锁；
+      2) 进入时先取账本快照；
+      3) 检查 removeRuleIds 中每个 ID 属于声明的 pool，否则抛错；
+      4) ledger.release(removeRuleIds) 释放旧额度；
+      5) ledger.canAdmit(...) 检查 pool 软上限、总安全上限（含 RESERVE 保护）、unsafe 上限、
+         regex 上限、pool regex 软上限；失败 → restore(快照)，返回 { ok:false, reason }；
+      6) updateDynamicRules 成功 → ledger.commit；抛错 → restore 后重新抛出。
+
+    对账（initBudgetLedger）：后台唤醒时从 getDynamicRules() 重建账本，通过 inferPoolFromId
+    从 ID 反推 pool。ID 分段是这套机制的前提，禁止跨池移动规则。
+
+    ID 分配的真实行为（更正旧文档）：调用方先 allocateRuleId，然后才进入
+    admitAndApplyInternal 取快照，所以准入失败时 restore 不会把 nextId 退回——被分配过的
+    ID 不会被复用，ID 序列里可能出现空洞。这是无害的（每个池有 100 万个 ID）；后台重启后
+    nextId 从 getDynamicRules() 的 max(id)+1 重建。
+
+【24.5  TRANSIENT 的 TTL 清理（sweep）】
+
+    - alarm：df-transient-sweep，初始 1 分钟后，此后每 5 分钟（SWEEP_INTERVAL_MIN）；
+    - 创建策略：先 chrome.alarms.get 检查存在性再 create，避免后台每次唤醒都重置周期
+      导致永远不到期；
+    - sweepExpiredTransientRules()：
+        0) 先调用 sweepStalePendingRequests()；
+        1) 遍历 pickerRules，找出 expiresAt <= now 且有 dnrRuleIds 的记录；
+        2) releaseTransientIds(idList) → releaseIdsFromPool('TRANSIENT', ids)；
+        3) 返回 !ok → 记录保持原样，直接返回，下次 sweep 重试；
+        4) 返回 ok → 这些 ID 全部从记录里清除，dnrRuleIds=[]、dnrExpired=true。
+    - releaseIdsFromPool 的返回约定（改动时务必保持）：
+        { ok:true,  released: 全部请求的 ID }   // 包括"本来就不在 DNR 里"的 ID
+        { ok:false, released: [], reason }      // 失败时 released 恒为空，调用方不得据此更新记录
+      查询 getDynamicRules 与删除 admitAndApplyInternal 在同一个 dnrQueue 任务里；
+      查询失败时失败关闭（不盲删）。
+      （旧版本在失败时也返回 released = 请求的 ID，会让 sweep 把记录标成已过期而规则仍在 DNR
+       里；并且"规则已不在 DNR"的 ID 永远清不掉。两个问题都已修复。）
+    - TTL 只作用于网络拦截，到期只释放 DNR，元素隐藏（cosmetic）保留；
+    - 修改 transientTtlMs 不影响已存在的规则，只影响之后新建的；
+    - onSuspend 里尽力 flush 日志，但不保证 sweep 完成——下一次 alarm 会补上。
+
+
+【24.6  元素拾取】
+
+    content.js（document_start，仅顶层框架，all_frames:false）：
+      1) cosmetic-get → background 返回当前 hostname 匹配的 pickerRules → 注入 <style>，
+         以 display:none !important 隐藏；
+      2) ping → 返回 'pong'。popup 启动拾取前先 ping，失败时提示刷新页面；
+      3) start-picker → 进入拾取模式：
+           - 注入 __df_picker_styles；html.__df_picking 使整页鼠标变手型；
+           - mousemove 高亮当前元素：2px 蓝框 + 半透明填充 + 脉冲阴影 + 尺寸标签
+             （位置自动避让视口边缘；首次显示关闭 transition，避免从 (0,0) 滑入）；
+           - click 打开确认面板；Esc 退出；ArrowUp 选父元素；
+      4) 确认面板：
+           - 选择器：id > class 组合 > nth-of-type 路径，最多向上 8 层。【路径被截到 8 层，
+             所以层级很深的元素可能生成匹配多个元素的选择器】；
+           - 匹配数量：showPanel 里 querySelectorAll(sel).length。>1 红色警告，按钮变
+             "隐藏 N 个元素"；点确认时重新数一次，>= MANY_MATCH_THRESHOLD（10）则 confirm()
+             二次确认；
+           - 网络拦截复选框：元素有 src/href/data-src/data-original 且为 http(s) 时出现；
+             面板创建后异步读 chrome.storage.local 的 advancedMode，没开则禁用并追加说明；
+      5) 确认 → 立即注入样式隐藏元素 → sendMessage('picker-add') → 按返回值弹 toast：
+           sendMessage 抛错        → "元素已在本页隐藏，但保存失败（扩展可能刚重新加载…）"
+           res 缺失或 ok === false → "元素已在本页隐藏，但保存失败：<原因>，刷新后会恢复显示"
+           勾选了网络拦截且 res.netError → "元素已隐藏，但网络请求拦截失败：<原因>"
+           勾选了网络拦截且成功    → "已隐藏元素，并拦截该 URL 的网络请求"
+         toast 只用 textContent、pointer-events:none，错误 6 秒 / 普通 3.5 秒后消失。
+         describeNetError 把"预算拒绝…"、"URL 无法转换…"翻成人话，其余截断到 80 字符。
+
+    background：
+      - addPickerRecord(msg) → { record, netError }。advancedMode 开且有 url 时调
+        applyPickerDnrRule；失败不影响元素隐藏，失败原因放进 netError；
+      - toPickerUrlFilter(raw)：把元素 URL 变成 DNR 的 urlFilter。只接受 http(s)、≤ 4096
+        字符；丢掉 #hash；在第一个 * ^ | 处截断（这些在 urlFilter 里是通配 / 分隔 / 锚点
+        语法）；结果仍须覆盖整个 origin；返回 '|' + 前缀（起始锚点 + 前缀匹配，
+        ?v=2 这类缓存参数变体仍会命中，但不会误中"把该 URL 嵌在查询串里"的别的请求）；
+      - applyPickerDnrRule：先校验 URL 再分配 TRANSIENT ID（失败不白占 ID），写入
+        priority 5000 的 block 规则，resourceTypes 为 sub_frame/stylesheet/script/image/
+        font/object/xmlhttprequest/ping/media/websocket/other；
+      - removePickerRecord：先释放 DNR；失败则保留记录；
+      - togglePickerRecord：active=true 且无 dnrRuleIds → 重建（"重新拦截"），重置 TTL；
+        active=false 且有 dnrRuleIds → 释放并清空；失败则回滚 active；
+      - broadcastCosmeticUpdate：向所有 tab 发 cosmetic-updated，content.js 重新拉取并覆写样式。
+
+    注意：被 DNR 拦截的 <img> / <iframe> 在 Chrome 里会被自动折叠（不占布局），之后就
+    选不中它了——想拾取这类元素要先把它的域名加进白名单或关掉拦截。
+
+【24.7  静态规则集】
+
+    - manifest.declarative_net_request.rule_resources 声明 easylist（默认启用）和
+      adguard-base（默认禁用）；background.js 里 RULESET_IDS 与之一致；
+    - applyRulesets() 读 enabledRulesets，与 getEnabledRulesets() 的当前状态比较，
+      只有存在差异才调 updateEnabledRulesets（后台每次唤醒都会走到这里，状态没变就不调）；
+    - enabledRulesets 是运行时唯一真相源；manifest 的 enabled 只决定初始状态；
+    - 静态规则集不经过 BudgetLedger：它们有独立的配额（每扩展 30k safe、同时 ≤ 50 个），
+      与 updateDynamicRules 的 30k 互不影响；
+    - 不能用动态规则"模拟"规则集更新：EasyList 本身接近 30k，搬进动态池会直接打满预算；
+    - 只允许 safe 动作：build-rules.mjs 在截断前过滤 redirect / modifyHeaders 和 regexFilter。
+
+【24.8  CUSTOM 转换与准入】
+
+    转换：@adguard/dnr-converter 2.x API，WASM 编译需要 wasm-unsafe-eval。
+      makeFilter(id, text) 把单行包装成 Filter；converter.convert([filter]) →
+      [{ ruleset, errors, limitations }]；ruleset.getDeclarativeRules() → DNR 规则数组；
+      errors 非空表示规则含 MV3 不可表达的修饰符；一行可能产出多条规则（如 $urltransform），
+      准入按实际产出数计预算。
+
+    优先级：写入时保留转换器给出的 priority（priority: r.priority || 1）。转换器用优先级
+      表达语义（@@ 例外 ≈ 1e5、$important ≈ 1e6 等），统一压成同一个值会让 $important
+      的拦截规则压不过普通例外。2.5 之前导入的规则是统一的 1000；已导入的旧规则不会自动
+      更新，要生效需删除旧批次后重新导入（去重签名不含 priority，直接重导入会被判为重复）。
+
+    准入（addCustomFiltersBatch）：在 dnrQueue 内执行。
+      去重 → 原子 / 宽松预算预检 → 分配 ID → temp.commit 模拟提交 →
+      admitAndApplyInternal('CUSTOM', { addRules }) → 成功后写 customRules 与 customBatches。
+    删除：removeCustomRule / removeCustomBatch 先 releaseIdsFromPool('CUSTOM', ids)，
+      失败则标记 stale 并保留记录；removeCustomBatch 把 customRules 与 customBatches 放在
+      同一次 chrome.storage.local.set 里写，避免两次写之间失败留下半截状态。
+
+【24.9  批量导入（Port + 去重 + 恢复）】
+
+    入口：options.js 通过 chrome.runtime.connect({ name: 'custom-batch' }) 建立 port；
+    background.js 的 onConnect 处理（协议见第 26 节）。
+
+    逐行转换 + 行级原子：一行产出的所有 DNR 规则要么全接受、要么全拒绝。
+    宽松模式（默认）：转换失败或预算不足的行被跳过并记录，成功的照常写入。
+    原子模式：任一转换失败或预算不足 → 整批回滚，不写入任何规则。取消优先于原子检查。
+    BATCH_MAX_LINES = 500：超限返回 too_many_lines。
+
+    跨批次去重：
+      签名 = JSON.stringify({ c: normalizeForSig(condition), a: normalizeForSig(action) })，
+      不含 id / priority；数组字段排序后比较。在 dnrQueue 内、准入之前，构建现有 CUSTOM 规则的
+      签名索引，三分类：
+        全部已存在且 ID 已归属   → 该行去重跳过（deduped）；
+        全部已存在但 ID 无人认领 → 认领：用现有 ID 创建 customRule 记录，不耗预算、不写 DNR；
+        否则                    → 正常分配 + 准入。
+      行级：一行的所有签名都命中才算去重；部分命中按"新规则"处理（极少出现）。
+
+    进度持久化（chrome.storage.session，键 batch-progress）：
+      - 每 1 秒或强制时写入；
+      - 单活跃批次：batchLock 内存锁 + 先到先得，第二次 start 返回 batch_in_progress；
+      - 恢复：{type:'start', resume:true} → 用保存的 text 与 current 继续。恢复前校验：
+        重新解析出的行数必须等于 total，且 current 为 0..行数之间的整数，否则丢弃保存的结果
+        从头重来；
+      - 幂等：进入 dnrQueue 时若 customBatches 已有该 batchId → 返回 alreadyCompleted、
+        清进度，不重复写入（options.js 对 alreadyCompleted 有专门展示）；
+      - 取消：转换阶段立即返回 { cancelled:true }；准入阶段在 dnrQueue 内、updateDynamicRules
+        之前检查一次；updateDynamicRules 已开始则不中断；
+      - 丢弃：discard-progress → 清 session 进度。
+    进度推送节流：background 每行都推 progress；options 端 100 ms 内最多更新一次 DOM。
+
+【24.10  弹窗：输入校验、页内提示、权限警告】
+
+    normalizeDomain(input)（popup.js，与 background 的 normalizeWhitelistEntry 保持同一套规则）：
+      trim+小写 → 用 URL 解析（裸域名补 http://），自动去协议 / 端口 / 路径、IDN→punycode；
+      拒绝带用户名密码；去末尾点；必须含点、≤ 253 字符；每个标签 1~63 字符且首尾为字母数字；
+      调用 psl.js 的 getRootDomain，返回 null（公共后缀）则拒绝。
+      popup 接受的结果，background 必须原样接受（有测试守着）。
+    showNotice(text, kind)：写入 #notice（默认 error，9 秒后消失）。popup 里所有原先的
+      alert() 都已替换成它。
+    权限警告：hasAllSitesAccess() 用 chrome.permissions.contains 判断，refreshHostWarning()
+      切换 #host-warning。init 时检查一次，并监听 permissions.onAdded / onRemoved。
+      "授予权限"按钮调 chrome.permissions.request；失败（Firefox 的弹窗里可能因为权限提示
+      让弹窗失焦关闭而失败）时提示用户到扩展管理页手动开启。
+      拾取前 ping 失败时先判断权限：缺权限给出对应提示，否则才提示"刷新页面"。
+
+--------------------------------------------------------------------------------
+ 25. 关键函数索引
+--------------------------------------------------------------------------------
+
+  格式：函数  [文件]  作用  —— 修改时注意。文件缩写：bg=background.js，bm=budget-manager.js，
+  ct=content.js，pp=popup.js，psl=psl.js。
+
+  getState()  [bg]  读 mode / whitelist / advancedMode  —— 默认值即契约
+  normalizeWhitelistEntry(raw)  [bg]  白名单条目规范化  —— 与 pp.normalizeDomain 规则一致
+  hostMatches(ruleHost, pageHost)  [bg]  精确或子域匹配  —— 拾取记录的 hostname 匹配用
+  makeQueue() / dnrQueue / applyQueue  [bg]  Promise 串行队列  —— 所有 DNR 写走 dnrQueue
+  scheduleRulesUpdate()  [bg]  CORE 更新入口，队列内合并  —— 唯一允许触发 CORE 重建的入口
+  buildFirewallRulesPayload()  [bg]  按 mode / whitelist 生成目标规则  —— 新增字段同步 ruleKey
+  getExistingFirewallRules() / ruleKey() / sameRules()  [bg]  现有规则与目标的比较
+  updateFirewallRulesInternal()  [bg]  真正重建 CORE（无变化则跳过）  —— 只能在 dnrQueue 内调用
+  applyMode()  [bg]  模式总入口，返回 Promise  —— 走 applyQueue；后台顶层必须调用
+  releaseIdsFromPool(pool, ids)  [bg]  通用释放（查询+删除同队列，失败关闭）  —— 返回约定见 24.5
+  releaseTransientIds(ids)  [bg]  TRANSIENT 池的释放封装
+  toPickerUrlFilter(raw) / buildPickerDnrRule / applyPickerDnrRule  [bg]  拾取的网络拦截规则
+  getInitiator(details)  [bg]  兼容 Chromium initiator 与 Firefox originUrl
+  redactDeep / redactBodyText / redactUrl / redactHeaders / finalizeLog  [bg]  日志脱敏
+  serializeRequestBody(body)  [bg]  formData / raw 序列化 + 脱敏 + 截断  —— 失败关闭
+  ensureRecordConfig()  [bg]  读取 recordRequestBody / redactUrl（Promise 缓存）
+  registerRecordListeners() / unregisterRecordListeners()  [bg]  记录监听器生命周期
+      —— register 是 async 且幂等；unregister 会清空 pendingRequests
+  ensureRecordState()  [bg]  顶层 main_frame 监听器的回调：唤醒后补注册记录监听器（去重）
+  sweepStalePendingRequests()  [bg]  清理长时间没有终止事件的 pending 条目
+  enqueueLog(log) / flushLogs()  [bg]  日志批量写入 + 失败回滚  —— 外部唯一写日志入口
+  addPickerRecord / removePickerRecord / togglePickerRecord  [bg]  拾取记录 CRUD
+      —— 删除 / 停用必须先释放 DNR；addPickerRecord 返回 { record, netError }
+  sweepExpiredTransientRules()  [bg]  过期 TRANSIENT 清理  —— 释放失败时整体保持原样
+  ensureSweepAlarm()  [bg]  创建 sweep alarm  —— 先 get 检查，避免周期被重置
+  getEnabledRulesets() / applyRulesets()  [bg]  静态规则集开关  —— 不经预算账本；无变化不调用
+  ensureConverter / makeFilter / convertSingleLine  [bg]  转换器初始化与单行转换（2.x API）
+  parseFilterLines  [bg]  去空行 / 注释 / [Adblock Plus] 头 / 重复行
+  addCustomFiltersBatch(...)  [bg]  批量转换 + 去重 + 准入 + 持久化
+      —— 支持 resumeState；dnrQueue 内执行；保留转换器的 priority
+  removeCustomRule / removeCustomBatch  [bg]  CUSTOM 删除  —— 失败标 stale；批次删除单次写入
+  ruleSignature / stripForSig / normalizeForSig  [bg]  去重签名  —— 不含 id / priority
+  progressStorage / maybeSaveProgress  [bg]  session 进度读写（节流 1 s）
+  batchLock  [bg]  单活跃批次内存锁  —— 不持久化
+  BudgetLedger  [bm]  账本核心：canAdmit / commit / release / allocateRuleId / snapshot /
+      restore / describe  —— 所有配额逻辑集中在此
+  admitAndApplyInternal(pool, {addRules, removeRuleIds})  [bm]  准入 + 写入 + 提交账本
+      —— 必须在 dnrQueue 内调用
+  initBudgetLedger / ensureBudgetReady / resetBudgetLedger  [bm]  账本初始化与对账
+  normalizeBudgetConfig  [bm]  份额越界保护
+  getRootDomain(hostname) / PSL_INFO  [psl]  eTLD+1 / 数据来源信息
+  normalizeDomain / showNotice / hasAllSitesAccess / refreshHostWarning  [pp]  见 24.10
+  loadCosmetic / ensureStyle  [ct]  隐藏样式注入  —— document_start 时 head 可能不存在
+  startPicker / stopPicker / highlight  [ct]  拾取模式 + 高亮
+  buildSelector / extractElementUrl  [ct]  选择器与元素网址
+  showPanel / showToast / describeNetError  [ct]  确认面板、结果提示
+
+--------------------------------------------------------------------------------
+ 26. 消息与端口协议
+--------------------------------------------------------------------------------
+
+  【26.1  runtime.sendMessage（后台统一回 { ok:false, error } 表示失败）】
+
+    发给 background（来自 content / popup / options）：
+      cosmetic-get {hostname}              → { rules }          匹配该站点的启用中的拾取记录
+      picker-add {hostname, selector, url} → { ok, record, netError }
+      picker-remove {id}                   → { ok }
+      picker-toggle {id, active}           → { ok }
+      picker-list                          → { rules }
+      budget-snapshot                      → { ok, snapshot }
+      sweep-now                            → { ok }             立即执行 TTL 清理
+      custom-add-batch {text, atomic}      → 批量结果（旧入口；当前设置页用 port）
+      custom-add {text}                    → 宽松模式的批量结果
+      custom-remove {id} / custom-remove-batch {batchId}
+      custom-list                          → { rules, batches }
+      batch-progress-get                   → { ok, progress }
+      batch-progress-discard               → { ok }
+
+    发给 content script（来自 background / popup，用 tabs.sendMessage）：
+      ping                → 'pong'
+      start-picker        进入拾取模式
+      cosmetic-updated    重新拉取并覆写隐藏样式
+
+  【26.2  端口 'custom-batch'（options → background）】
+
+      options → background:  {type:'start', text, atomic, resume?}
+                             {type:'cancel'}
+                             {type:'discard-progress'}
+      background → options:  {type:'progress', phase:'parse'|'convert'|'admit', ...}
+                             {type:'done', result}
+                             {type:'error', error}
+                             {type:'discarded'}
+
+--------------------------------------------------------------------------------
+ 27. 已知限制与"不要踩的坑"
+--------------------------------------------------------------------------------
+
+  【公共后缀 / 同站判断】
+   1. psl.js 现在使用官方 PSL 数据（生成的数据块，来源见 PSL_INFO），但只用于 popup 的输入
+      校验。真正的"同站"判断由浏览器的 domainType 完成，两者不会完全一致（尤其是私有后缀）。
+   2. psl.js 把通配规则的基底（如 kobe.jp、nom.br）也当作公共后缀（比严格的 PSL 规范更保守，
+      与常见实现一致）；EXTRA_SUFFIXES（surge.sh、wordpress.com）是为保持旧行为保留的。
+   3. 单标签 IDN 输入（如 中国）getRootDomain 返回 punycode 形式。
+
+  【记录模式 / 日志】
+   4. pendingRequests 是内存 Map：后台在请求进行中休眠会丢这条日志；超过 5 分钟的请求会被
+      sweep 提前落盘（24.2）。
+   5. 日志批量写入有丢失窗口：休眠时未 flush 的缓冲会丢（最多约 50 条或 100 ms）；onSuspend
+      尽力 flush 但不可靠。零丢失需改 IndexedDB 或每条同步写。
+   6. 唤醒那次导航的 main_frame 请求本身可能漏记（24.2）。
+   7. requestBody 可见性受浏览器限制：部分 POST 拿不到 body，必须判空。
+   8. 请求体脱敏是按字段名的尽力而为，不能保证覆盖所有格式；无法识别的格式一律不保存内容。
+   9. recordRequestBody / redactUrl 目前没有界面开关。
+  10. main_frame 已从 resourceTypes 移除：顶层导航放行，跨站跳转广告不再被拦。
+
+  【规则与预算】
+  11. 优先级：用户的 @@ 例外（≈1e5）能压过 CORE（1）和拾取规则（5000）。这是有意的，
+      但会让"拾取的网络拦截"被某条恰好匹配的例外放行。
+  12. 2.5 之前导入的 CUSTOM 规则优先级是统一的 1000，需删除后重新导入才会采用转换器的优先级。
+  13. BudgetLedger 是内存态：后台休眠后丢失，唤醒时从 getDynamicRules() 对账重建。
+      不要尝试持久化账本，与浏览器实际规则状态对账才是最可靠的。
+  14. ID 分段是契约：inferPoolFromId 决定对账时规则归属哪个池。跨池移动规则只能"删除旧 ID
+      + 添加新 ID"，不能改 priority。
+  15. ID 分配失败不回退 nextId（24.4 的更正）：序列里可能有空洞，无害。
+  16. RESERVE 份额不可被 canAdmit 借用：所有池 totalDynamicUsed 合计不得超过
+      totalSafe - reserveCap，这是最后一道防线。
+  17. 静态规则集与动态预算是独立配额：不要把 easylist 的规则数算进 BudgetLedger。
+  18. 静态规则集只允许 safe 动作；将来手写 rules/*.json 必须遵守。
+  19. adguard-base.json 默认禁用但规则集本身会被加载：浏览器会校验所有 rule_resources
+      声明的文件，不管 enabled 是 true 还是 false，所以它也必须清理掉 unsafe 规则。
+  20. 两个规则集同时启用会超 30k 上限：默认只启用 easylist（≤ 28000 条）；勾选
+      adguard-base 时 updateEnabledRulesets 大概率失败。需要拆成多个子规则集才能解决。
+  21. build:rules 在 Node 下会拒绝所有正则规则（re2-wasm 检测不到 chrome.declarativeNetRequest，
+      保守拒绝），这反而保护了产物；CUSTOM 单行导入在后台运行时，正则会被正确验证。
+  22. getDynamicRules({ruleIds}) 的过滤在部分浏览器可能被忽略，结果必须再按 id 过滤。
+  23. 每次 updateDynamicRules 都会让浏览器重建整个动态规则集：不要在后台每次唤醒时无条件写入
+      （已通过 sameRules / applyRulesets 的"无变化则跳过"处理）。
+
+  【TTL / 拾取】
+  24. TRANSIENT 的 TTL 到期最多延迟 5 分钟（alarm 周期）；用户可点"立即清理过期规则"。
+  25. 修改 transientTtlMs 不影响已存在的规则，这是刻意的。
+  26. TRANSIENT 释放失败时保留记录并回滚 active，下次可重试，不会留下孤儿规则占用预算。
+  27. 选择器最多 8 层路径，层级很深的元素可能匹配多个元素（面板会给出数量警告）。
+  28. 被 DNR 拦截的 <img> / <iframe> 在 Chrome 里会被折叠，之后选不中。
+  29. 拾取高亮框在带 transform 的祖先容器里定位可能偏移（position:fixed 的基准被改变），
+      少数 SPA 框架下可见，当前未处理。
+  30. content.js 的样式是页面内注入的 <style>：页面 CSP 的 style-src 禁止 inline 时注入可能
+      失败（Chrome 对扩展注入通常豁免，Firefox 未验证），极少数站点受影响。
+
+  【自定义规则】
+  31. CUSTOM 去重是"签名级"而非语义级：$badfilter 等修饰符转换器只做部分支持，去重感知不到
+      "这条规则想撤销另一条"的意图。
+  32. 孤儿认领：DNR 里存在签名匹配、但 ID 未归属任何 customRules 记录的 CUSTOM 规则时，
+      导入同签名规则会认领它（不新增）。这是后台在 updateDynamicRules 与 setCustomRules
+      之间崩溃后的恢复机制。
+  33. 批次进度只存 chrome.storage.session，浏览器重启后不可恢复，是刻意的。
+  34. batchLock 是内存锁，后台重启后归零；batch-progress 是持久化层，两者共同保证"同时只有
+      一个批次"。不要把 batchLock 持久化。
+  35. 取消在 updateDynamicRules 已开始后无效：DNR 写入本身原子，中断无意义。
+  36. BATCH_MAX_LINES = 500：避免 runtime.sendMessage 超时和单次转换占用后台过久。
+  37. customRules 的 stale 是"需要重试"标记：释放失败时设置，UI 显示红色，再次删除会重试。
+
+  【跨浏览器 / 运行环境】
+  38. Firefox 主机权限默认不授予：拦截仍工作，记录模式与拾取不可用（20.2、24.10）。
+  39. Firefox 的弹窗里 chrome.permissions.request 可能失败（弹窗因权限提示而关闭）。
+  40. 扩展重载后已打开页面的 content script 不会自动更新：这是用户体验上最容易踩的坑，
+      popup 的 ping 握手就是为它而设。
+  41. 必须随包分发：budget-manager.js、dnr-converter.bundle.js（background 依赖）、psl.js
+      （popup 依赖）；缺失会降级（预算管理器抛错、CUSTOM 转换器不可用、白名单校验退化）。
+  42. 'wasm-unsafe-eval' 不可省：删掉后 re2-wasm 无法编译，CUSTOM 转换全部失败。
+  43. 图标必须存在：manifest.icons 引用的 icon{16,32,48,128}.png 缺任何一个，Chrome 加载失败。
+  44. Edge / Opera 没有实机测试过；Firefox 仅在模拟环境验证（31.3）。
+
+  【界面 / 样式】
+  45. options.js 的 <details> 延迟 stringify：展开时才生成 JSON，避免一次渲染 800 行大对象。
+      修改渲染逻辑时保留这个优化。
+  46. 分段控件用 :has() 做滑块（Chrome 105+、Firefox 121+）。
+  47. prefers-reduced-motion: reduce 会全局降级动画（时长降到 0.01 ms），是无障碍特性，别绕开。
+  48. content.js 的 alert()/confirm() 运行在网页上下文，可能被页面屏蔽；关键反馈走页内 toast。
+
+--------------------------------------------------------------------------------
+ 28. 常见扩展任务 → 改动指引
+--------------------------------------------------------------------------------
+
+  恢复拦截顶层导航
+      background.js 的 FIREWALL_RESOURCE_TYPES 加回 main_frame。同步 24.1；
+      domainType 对顶层导航的判断需要重新评估（导航没有"发起页"的概念）。
+  按标签页独立模式
+      规则要加 tabIds 条件（或改用 session 规则）并按 tab 分配 ID / 管理生命周期；
+      仍走 dnrQueue。
+  日志持久化到 IndexedDB
+      替换 enqueueLog / flushLogs 的 storage 读写；options.js 读取路径同步改；
+      onChanged 机制需重设计。
+  日志零丢失
+      enqueueLog 改为每条立即写，或 IndexedDB。放弃批量写入的性能收益（24.2）。
+  给隐私开关加界面
+      options.html / options.js 增加两个开关，读写 recordRequestBody 与 redactUrl 两个键；
+      background 的 storage.onChanged 已经在监听。
+  扩充脱敏
+      SENSITIVE_KEY_RE / URL_SENSITIVE_RE / SENSITIVE_HEADERS；请求体按 Content-Type 解析
+      需要在 onBeforeSendHeaders 阶段把头与 body 关联起来（目前 body 在 onBeforeRequest 序列化）。
+  增加"暂停 5 分钟"
+      新增 pausedUntil 时间戳，applyMode / scheduleRulesUpdate 判断；定时唤醒用 chrome.alarms，
+      不要用 setTimeout。
+  导出 HAR
+      options.js 导出逻辑做字段映射（HAR 规范对 headers 结构有要求）。
+  调整预算份额
+      budget-manager.js 的 DEFAULT_BUDGET_CONFIG 或用户 budgetConfig；同步 24.4。
+  新增预算消费者
+      在 POOL_ID_RANGES 与 DEFAULT_BUDGET_CONFIG 中加池；必须分配独立 ID 段；
+      对账靠 inferPoolFromId。
+  扩大 CUSTOM 导入上限
+      BATCH_MAX_LINES；同步评估 runtime.sendMessage 超时和后台占用。
+  规则集远程更新
+      需要新增网络权限与远程拉取逻辑（并更新隐私说明与商店披露）；静态规则集本身只能随发版更新。
+  拆分静态规则集
+      build-rules.mjs 的 RULESETS 与 manifest.rule_resources、background.js 的 RULESET_IDS、
+      options.js 的 RULESET_META 一起改；每个子集单独控制数量，避免总数超 30k。
+  孤儿规则巡检
+      定期 getDynamicRules() 找未归属 ID，UI 提供"认领 / 删除"，比导入时顺带认领更可靠。
+  支持新的浏览器
+      先确认它的 MV3 / DNR 支持，再看 20.4 的规则；需要单独 manifest 的话，仿照
+      manifest.firefox.json 增加补丁，并在 build-dist.mjs 增加目标。
+  新增图标尺寸
+      build-icons.mjs 的 SIZES + manifest.icons。
+  调整拾取视觉
+      content.js 的 highlight() 和 __df_picker_styles；保持 html.__df_picking 的指针覆盖。
+  改主题色
+      popup.html / options.html 的 --brand 变量 + icons/icon.svg，两处保持一致。
+
+--------------------------------------------------------------------------------
+ 29. 调试与验证清单
+--------------------------------------------------------------------------------
+
+  【基础】
+   - 规则是否生效：后台控制台搜 "[Domain Firewall] 拦截规则已更新" / "规则集已更新"；
+     没有变化时不会打印（无变化不写入）。
+   - 验证拦截：DevTools Network → 第三方【子资源】显示 (blocked:other)；顶层导航不应被拦。
+   - 同站 / 第三方：在 a.com 的页面里引用 a.com 的子域名资源（放行）与另一个站点的资源（阻断）。
+   - 验证 PSL：getRootDomain('bbc.co.uk') → 'bbc.co.uk'；getRootDomain('co.uk') → null；
+     getRootDomain('shop.example.co.id') → 'example.co.id'。
+   - 验证记录：切到 record → 浏览几秒 → 设置页日志持续增长（批量写入，可能略延迟）。
+   - 验证 SW 唤醒：关闭浏览器再打开，模式保持，applyMode 日志重新出现；budget-snapshot 的
+     used 与 getDynamicRules() 一致。
+
+  【2.5 新增行为的专项验证】
+   - 跨域跳转：在 a.com 点链接到 b.com，b.com 自己的 CSS/JS/图片应直接加载成功
+     （旧版会因规则滞后先被拦）。
+   - 多标签页：开两个不同站点的标签页，切换前台，后台标签页里页面发起的同站请求仍放行、
+     跨站请求仍阻断。
+   - 白名单粒度：加入 cdn.example.com 后 tracker.example.com 仍被拦；加入 example.com 则
+     所有子域放行。加入中文域名保存为 xn-- 形式。
+   - 脱敏：record 模式下访问带 ?token=abc 的网址，日志里 URL 显示 token=[redacted]；
+     提交带 password 字段的表单，日志请求体里密码被遮、用户名保留。
+   - 权限警告：（Chrome）把网站访问权限改成"点击时"，弹窗出现黄色警告；
+     （Firefox）默认就会出现。
+   - 拾取：匹配多个元素时出现红色警告与"隐藏 N 个元素"；未开高级模式时网络拦截勾选框被禁用；
+     制造预算已满 / 非法 URL 时出现对应 toast。
+
+  【预算 / TRANSIENT】
+   - 预算快照：设置页底部显示 CORE.used=1（block 模式）、TRANSIENT.used=N。
+   - 份额调整：把 TRANSIENT 改成 1% 保存 → 账本重建；之后新增被拒并记录 pool_full；
+     CORE 的 RULE_ID=1 不受影响。
+   - TTL：高级模式拾取带 src 的 <img> → 记录出现 expiresAt ≈ now + transientTtlMs；
+     点"立即清理过期规则" → 过期记录 dnrExpired=true、dnrRuleIds=[]。
+   - 周期 alarm：不手动点，等 5 分钟，控制台有 sweep 释放 N 条过期 TRANSIENT 规则。
+   - 重新拦截：已过期记录点"重新拦截" → 新 ID、expiresAt 重置、dnrExpired=false。
+   - alarm 不被重置：频繁开关 popup，chrome.alarms.get('df-transient-sweep') 的
+     scheduledTime 不被推后。
+
+  【元素拾取】
+   - content script 已加载：测试页控制台应看到 "[Domain Firewall] content script 已加载 @ <hostname>"。
+   - ping 握手：扩展重载后不刷新页面，直接点拾取按钮 → 提示刷新页面；刷新后重试成功。
+   - 鼠标指针、高亮框、尺寸标签、Esc 退出、↑ 选父元素。
+   - 高级模式 + 网络拦截：勾选高级模式，拾取带 src 的 <img>（注意：要选同站或已放行的图，
+     被拦截的图会被折叠选不中）→ pickerRules 记录的 dnrRuleIds 出现一个 3xxxxxx 的 ID，
+     getDynamicRules() 能看到 urlFilter 以 | 开头的规则。
+   - 撤销：设置页拾取记录点删除 → 页面收到 cosmetic-updated → 元素恢复显示。
+
+  【CUSTOM】
+   - 单条：导入 ||ads.example.com^$third-party → 成功，CUSTOM.used +1。
+   - 去重：再次导入相同规则 → "成功 0，去重 1"，CUSTOM.used 不变。
+   - 部分失败（宽松）：5 行合法 + 3 行 $replace → 已导入 5，转换失败 3；展开结果看明细。
+   - 部分失败（原子）：同上 + 原子模式 → 整体拒绝，CUSTOM.used 不变。
+   - 预算拒绝：CUSTOM 份额调到 1% → 导入 400 行 → 部分成功 / 部分 pool_full；原子模式整体拒绝。
+   - 删除：手动在控制台删掉底层 DNR 规则 → UI 删除该条 → 成功（过滤不存在的 ID）；
+     释放报错时记录标 stale。
+   - 批次：删除整批 → 该批所有规则和记录被清除，CUSTOM.used 一次性减少。
+   - 优先级：导入 ||x.com^$important 与 @@||x.com^，$important 的拦截应压过普通例外。
+
+  【批量进度 / 恢复】
+   - 进度可见：50 行导入 → 进度条 0 → 50，消息显示"转换中 X/50 …"。
+   - 节流：500 行导入，消息更新约 10 次/秒。
+   - 中途取消：300 行，第 100 行点取消 → cancelled；CUSTOM.used 不变。
+   - SW 重启恢复：300 行导入，中途 chrome.runtime.reload() → 设置页显示"连接中断"；
+     重开设置页出现横幅"已转换 X/300"，批量导入按钮 disabled。
+   - 恢复 / 丢弃 / 幂等（alreadyCompleted）/ 孤儿认领，同上一版行为。
+
+  【Firefox 专项】
+   - 用 dist/firefox 临时载入，控制台无 "budget-manager.js 未加载"；
+   - 在 about:addons 授予"访问所有网站的数据"后，记录模式与拾取可用；
+   - 弹窗里提示（白名单非法输入等）显示为页内红框，不依赖 alert；
+   - 设置页进度条有颜色（-moz-progress-bar）；
+   - 自定义规则导入能转换（验证 WebAssembly，见 31.3）；
+   - 在严格 CSP 的站点上试拾取，确认隐藏样式能生效（见 31.3）。
+
+  【图标与动画】
+   - 工具栏图标：蓝色盾牌 + 白色斜杠；扩展管理页显示 48 / 128 px 图标；
+   - popup 入场、分段滑块、开关弹簧缓动、白名单瀑布淡入、options 卡片错开淡入、
+     details 展开箭头旋转、恢复横幅滑入；
+   - 系统开启"减少动态效果"时所有动画瞬间完成。
+
+  【回归】
+   - 三种模式各切一次：getDynamicRules() 在 record / off 下只含 CUSTOM / TRANSIENT（若有），
+     block 下含 CORE；静态规则集开关独立。
+
+--------------------------------------------------------------------------------
+ 30. 最小验证脚本
+--------------------------------------------------------------------------------
+
+  在后台控制台（Chrome 的 service worker 控制台 / Firefox 的"检查"）执行：
+
+      // 动态规则；block 模式下应含 id=1，condition.domainType 为 'thirdParty'
+      await chrome.declarativeNetRequest.getDynamicRules();
+      // 启用的静态规则集，默认 ['easylist']
+      await chrome.declarativeNetRequest.getEnabledRulesets();
+      // 状态
+      await chrome.storage.local.get(['mode','whitelist','enabledRulesets','advancedMode',
+                                      'transientTtlMs','recordRequestBody','redactUrl']);
+      // 账本
+      await chrome.runtime.sendMessage({ type: 'budget-snapshot' });
+      // 批次进度（session）
+      await chrome.storage.session.get({ 'batch-progress': null });
+      // 转换器自检（2.x API）
+      typeof self.DnrConverter;       // 'object'
+      const c = new self.DnrConverter.FilterConverter();
+      const f = new self.DnrConverter.Filter(1, '||ads.example.com^$third-party');
+      const [r] = await c.convert([f]);
+      console.log(r.errors, await r.ruleset.getDeclarativeRules());
+      // 运行环境（Chromium 为 true，Firefox 事件页为 false）
+      CAN_IMPORT_SCRIPTS;
+
+  在弹窗页的控制台执行（psl.js 只由 popup.html 加载；把 chrome-extension://<扩展ID>/popup.html
+  在标签页里打开，按 F12）：
+
+      PSL_INFO;                         // { source, generatedAt, rules }
+      getRootDomain('bbc.co.uk');       // 'bbc.co.uk'
+      getRootDomain('co.uk');           // null
+
+  在任意网页的控制台执行：
+
+      window.__dfContentLoaded;         // true
+      // ping 握手（content script 的隔离环境里才能调；在页面控制台里请选择扩展的上下文）
+      chrome.runtime.sendMessage({ type: 'ping' });
+
+  预期：
+    - block 下规则 1 的 resourceTypes 不含 main_frame；record / off 下没有规则 1；
+    - getEnabledRulesets() 返回预期规则集；
+    - budget-snapshot 的 used 与 getDynamicRules() 中对应池的规则数一致；
+    - getRootDomain 未定义 → psl.js 未加载；self.DnrConverter 为 undefined → 未运行
+      npm run build:converter（Firefox 还要检查 background.scripts 的顺序）；
+    - 转换器自检返回 errors: [] 和长度 1 的规则数组；报 "convert is not a function" →
+      bundle 是旧版，重跑 build:converter；
+    - 页面里 __dfContentLoaded 为 true 且 ping 返回 'pong' → content script 已注入，否则刷新页面。
+
+--------------------------------------------------------------------------------
+ 31. 测试记录（验证了什么、没验证什么）
+--------------------------------------------------------------------------------
+
+  本节记录 2.5 版本在开发过程中实际执行过的验证。这些测试脚本是在开发沙盒里临时编写的，
+  【没有随源码一起提供】；下面的场景描述足够让后人重写（建议放进 tests/ 并接入 npm test，
+  用 Playwright 加载 dist/chrome，配合本地 http 服务器和模拟 chrome 对象的 vm 环境）。
+
+  【31.1  自动化测试结果】
+
+   a) 真实 Chromium 端到端（Playwright 驱动无头 Chromium，加载 dist/chrome，
+      两个本地站点 localhost 与 127.0.0.1 充当"不同站点"，服务器记录实际收到的请求）：32 项通过
+        T0  后台启动无控制台错误；默认拦截模式写入 thirdParty 规则；
+        T1  同站资源加载成功；跨站资源被拦截且服务器没收到请求；
+        T2  白名单写入规则、放行后加载成功；清空后规则不再含 excludedRequestDomains；
+        T3  跨域跳转后新页面自己的资源直接加载成功；新页面里的跨站资源仍被拦；
+        T4  前台是另一个站点时，后台标签页的同站请求仍放行、跨站仍阻断；
+        T5  记录模式移除拦截规则、产生日志；URL 的 token 被遮、其他参数保留；
+            POST 表单用户名保留、密码被遮；切回拦截模式规则恢复；
+        T6  弹窗加载；添加中文域名保存为 punycode；公共后缀被拒绝并显示页内提示；
+            模拟缺少主机权限时显示警告，授权失败给出提示；
+        T7  content script 注入并响应 ping；确认面板显示匹配数量；元素被隐藏；成功 toast；
+            拾取记录与网络规则写入，urlFilter 带起始锚点；
+        T8  设置页加载；全程后台无 console.error、页面无未捕获异常。
+   b) 后台逻辑集成测试（模拟 chrome API 的 vm 环境）：27 + 50 项通过
+        拦截规则内容、无变化不写入、模式切换、白名单规范化、脱敏（formData / JSON /
+        urlencoded / 截断 JSON / 二进制 / 未知格式）、URL 脱敏、releaseIdsFromPool 的失败关闭与
+        返回约定、sweep 的失败与"规则已不在 DNR"、removeCustomBatch 单次写入、
+        pendingRequests 的超时与上限清理、ensureRecordState 去重、record 模式下改白名单不清空
+        pending、netError、toPickerUrlFilter。
+   c) psl.js：20 组检查 + 与 npm 包 psl 的差分测试（28,033 个主机名，不一致 0）；
+      契约、通配 / 例外规则、IDN、常见站点新旧一致。生成脚本在官方 .dat 格式（含 Unicode、
+      CRLF、注释）上往返一致，重复运行逐字节相同，错误路径信息清晰。
+   d) popup 的 normalizeDomain：32 个输入，且每个被接受的结果 background 都原样接受。
+   e) content.js 的 DOM 测试（真实 Chromium + 模拟 chrome 对象）：30 项通过
+        匹配数量与警告、二次确认、高级模式开关、各种失败 toast、textContent 防注入、自动消失。
+   f) Firefox 事件页模拟（无 importScripts、全局为 window、按 manifest 顺序加载）：17 项通过
+        依赖仍被加载、启动无报错、规则写入、唤醒监听器注册、getInitiator、忽略过滤参数的
+        getDynamicRules、缺依赖时的明确报错、Firefox manifest 静态检查。
+
+  【31.2  构建与打包验证】
+   - scripts/build-dist.mjs（四个浏览器 + --release）：
+       全部构建成功；Chrome / Edge / Opera 三份逐文件相同，与 Firefox 只差 manifest.json；
+       错误路径：未知目标、--release 与 --target 混用、缺图标、规则集含 redirect / 正则、
+       引用了 package.json 之类不该发布的文件，均失败并给出明确信息；
+       警告路径：占位规则集、manifest 与 package.json 版本不一致；
+       扩展点：manifest.edge.json 补丁只影响 edge；signed/ 里的已签名 .xpi 被 Firefox 整包采用，
+       INSTALL.txt 的措辞随之变化；
+       zip 用 Python zipfile 与系统 unzip -t 校验通过，商店包与整包里的 extension/ 逐文件一致；
+       SHA256SUMS.txt 用 sha256sum -c 校验通过；INSTALL.txt 为 UTF-8 BOM + CRLF。
+   - 用户视角的流程验证：把 Chrome / Edge / Opera 三个整包各自解压，对解压出的 extension/ 文件夹
+     在真实 Chromium 里分别跑了 31.1 a 的 32 项端到端测试，全部通过；Firefox 整包解压后用
+     31.1 f 的事件页模拟验证，17 项通过。（这里用的是占位规则集，不是真实的 EasyList。）
+   - scripts/build-psl.mjs：见 31.1 c。
+
+  【31.3  未验证项（发布前请补测）】
+   Firefox 必测的两项：
+     A) 严格 CSP 的网站上，content.js 注入的 <style> 是否被页面 CSP 拦截（影响元素隐藏）；
+     B) 事件页里 WebAssembly 版转换器能否实例化（影响"自定义规则批量导入"）。
+   其他：
+     - 没有在真实 Firefox、Edge、Opera 里运行过；
+     - 没有用真实的 EasyList / AdGuard 过滤列表构建过规则集（测试用的是占位规则集），
+       真实规则集的数量、体积、加载耗时需在首次完整构建后检查；
+     - npm run build:icons / build:converter / build:rules 没有在开发沙盒里运行
+       （沙盒无法 npm install），沿用的是项目原有脚本和你提供的转换器产物；
+     - 没有测试 Chrome 120 以下版本；
+     - 没有测试真实 Chrome 弹窗里 chrome.permissions.request 的授权对话框；
+     - npx web-ext lint 没有运行过，提交 Firefox 商店前请先跑一遍；
+     - domainType: 'thirdParty' 对 github.io 这类私有后缀的判断依赖浏览器实现，未逐一实测。
+
+--------------------------------------------------------------------------------
+ 32. 变更记录
+--------------------------------------------------------------------------------
+
+  【2.5】跨浏览器、规则模型重构、隐私与可靠性
+    拦截规则
+      - CORE 规则改为 domainType:'thirdParty' + excludedRequestDomains（按发起页判断），
+        不再依赖当前标签页；删除 tabs.onActivated / onUpdated 监听；解决跨域跳转时新页面资源
+        先被误拦、后台标签页被误拦的问题；
+      - 白名单按用户输入的粒度保存与生效（不再升格成根域名）；规范化支持 IDN→punycode；
+      - 规则 / 规则集没变化时跳过 updateDynamicRules / updateEnabledRulesets；
+        sameRules 改为只比较我们写入的字段（ruleKey）；
+      - getDynamicRules 结果再按 id 过滤。
+    公共后缀
+      - psl.js 换成官方 PSL 数据（9776 条）+ 规范算法；新增 scripts/build-psl.mjs；
+        修复 co.id / co.th / or.id / com.ng 等后缀错误；psl.js 不再被 background 加载。
+    记录模式与隐私
+      - 唤醒用的顶层 main_frame 监听器；ensureRecordConfig 先于监听器注册；
+      - 请求体 / 请求头 / URL 查询参数脱敏；修复 raw 请求体永远只得到 '[binary]' 的 bug；
+        未知格式失败关闭；新增 recordRequestBody、redactUrl 开关；
+      - pendingRequests 超时 / 上限清理；record 模式下改白名单不再清空 pending。
+    可靠性
+      - releaseIdsFromPool：查询与删除同队列、失败关闭、失败时 released=[]，并让"规则已不在 DNR"
+        的 ID 也能被 sweep 清掉；sweep 释放失败时记录保持原样；
+      - removeCustomBatch 单次写入；批次恢复增加进度边界校验；
+      - CUSTOM 规则保留转换器的优先级（不再统一 1000）；
+      - 拾取的 urlFilter 加起始锚点、截断特殊字符、校验 http(s)；校验先于 ID 分配；
+        addPickerRecord 返回 netError。
+    界面
+      - content.js：匹配数量与二次确认、保存 / 网络拦截结果 toast、高级模式未开时禁用勾选框；
+      - popup：normalizeDomain 重写、alert 全部换成页内提示、缺主机权限时的警告与授权按钮、
+        文案更新；options：Firefox 进度条样式。
+    跨浏览器与构建
+      - 新增 manifest.firefox.json 与 scripts/build-dist.mjs：Chrome / Edge / Opera / Firefox
+        四个浏览器分别构建（dist/<浏览器>/ 与商店上传用 zip）；manifest.<浏览器>.json 为可选补丁；
+      - 新增 npm run release：生成 release/（给最终用户的整包 + INSTALL.txt、商店上传包、
+        SHA256SUMS.txt、RELEASE.txt），并做发布前体检（占位规则集、不安全规则、多余文件、
+        版本一致性）；Firefox 可通过 signed/ 采用已签名的 .xpi；
+      - background.js 增加 CAN_IMPORT_SCRIPTS 与 getInitiator；
+      - package.json 新增 build:psl、dist、dist:chrome、dist:edge、dist:opera、dist:chromium、
+        dist:firefox、package、release；版本 2.5.0；
+      - manifest.json 版本 2.5，描述更新。
+    文档
+      - 本文档重写：加入使用说明书与构建说明书；更正了 nextId 的描述（不回退）、
+        主机权限的作用（拦截不需要）、PSL 的现状、tabs 监听的移除。
+
+  【2.4】基线版本（本文档此前的交接文档对应的版本）。
+
+================================================================================
+ 文档结束
+================================================================================

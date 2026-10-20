@@ -1,0 +1,27 @@
+{
+  "name": "domain-firewall",
+  "version": "2.5.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:icons": "node scripts/build-icons.mjs",
+    "build:converter": "node scripts/build-converter.mjs",
+    "build:rules": "node scripts/build-rules.mjs",
+    "build:psl": "node scripts/build-psl.mjs",
+    "dist": "node scripts/build-dist.mjs",
+    "dist:chrome": "node scripts/build-dist.mjs --target chrome",
+    "dist:edge": "node scripts/build-dist.mjs --target edge",
+    "dist:opera": "node scripts/build-dist.mjs --target opera",
+    "dist:chromium": "node scripts/build-dist.mjs --target chromium",
+    "dist:firefox": "node scripts/build-dist.mjs --target firefox",
+    "package": "npm run build && npm run dist",
+    "release": "npm run build && node scripts/build-dist.mjs --release",
+    "build": "npm run build:icons && npm run build:converter && npm run build:rules"
+  },
+  "devDependencies": {
+    "@adguard/dnr-converter": "^2.0.0",
+    "@adguard/re2-wasm": "^1.0.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "esbuild": "^0.21.0"
+  }
+}
