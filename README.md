@@ -1,3 +1,4 @@
+<img width="48" height="48" alt="icon48" src="https://github.com/user-attachments/assets/76f5e406-4cce-47ae-b2bd-0374c12ae73d" />
 # Domain Firewall
 
 > **以当前页面域名为基准的浏览器反向白名单防火墙。**  
