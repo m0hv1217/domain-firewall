@@ -1,0 +1,18 @@
+{
+  "_说明": "这是 Firefox 版的 manifest 补丁，由 scripts/build-dist.mjs 合并到 manifest.json 上（值为 null 表示删除该键；以下划线开头的键会被忽略）。",
+
+  "background": {
+    "service_worker": null,
+    "scripts": ["budget-manager.js", "dnr-converter.bundle.js", "background.js"]
+  },
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "domain-firewall@example.com",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+}

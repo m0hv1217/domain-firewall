@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- 盾牌主体 -->
+  <path d="M64 8
+           L112 26
+           V64
+           C112 94 92 112 64 120
+           C36 112 16 94 16 64
+           V26
+           Z"
+        fill="#2E5BFF"/>
+
+  <!-- 内层浅色高光（可选，增强立体感） -->
+  <path d="M64 20
+           L100 34
+           V64
+           C100 87 84 101 64 108
+           C44 101 28 87 28 64
+           V34
+           Z"
+        fill="#4F7CFF"/>
+
+  <!-- 阻断斜杠 -->
+  <line x1="46" y1="82" x2="82" y2="46"
+        stroke="#FFFFFF"
+        stroke-width="11"
+        stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Domain Firewall · 控制台</title>
+  <style>
+    :root {
+      --brand: #2E5BFF;
+      --brand-hover: #1E48E0;
+      --brand-soft: #E8EDFF;
+      --danger: #E53935;
+      --danger-soft: #FFEBEE;
+      --ok: #2E7D32;
+      --ok-soft: #E8F5E9;
+      --warn: #FB8C00;
+      --warn-soft: #FFF3E0;
+
+      --bg: #FFFFFF;
+      --bg-subtle: #F7F8FA;
+      --bg-hover: #F0F2F5;
+      --border: #E1E4E8;
+      --border-strong: #C8CDD4;
+
+      --text: #1F2328;
+      --text-muted: #6B7280;
+      --text-faint: #9CA3AF;
+
+      --radius-sm: 4px;
+      --radius: 6px;
+      --radius-lg: 10px;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+      --shadow: 0 2px 8px rgba(0,0,0,0.08);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+      --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+      --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+      --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
+      --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+      --dur-fast: 150ms;
+      --dur: 220ms;
+      --dur-slow: 320ms;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --brand: #5B7FFF;
+        --brand-hover: #7393FF;
+        --brand-soft: #1A2456;
+        --danger: #FF5C57;
+        --danger-soft: #3A1A1A;
+        --ok: #66BB6A;
+        --ok-soft: #1A3A1C;
+        --warn: #FFA726;
+        --warn-soft: #3A2A0A;
+
+        --bg: #1A1D21;
+        --bg-subtle: #23272E;
+        --bg-hover: #2C323A;
+        --border: #353B45;
+        --border-strong: #4A5058;
+
+        --text: #E6E8EB;
+        --text-muted: #9BA3AE;
+        --text-faint: #6B7280;
+
+        --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+        --shadow: 0 2px 8px rgba(0,0,0,0.4);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* ---------- 关键帧 ---------- */
+    @keyframes df-card-in {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes df-slide-down {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes df-fade-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes df-pulse-warn {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(251,140,0,0); }
+      50%      { box-shadow: 0 0 0 4px rgba(251,140,0,0.15); }
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* ---------- 布局 ---------- */
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px 32px 64px;
+    }
+
+    /* ---------- 品牌头 ---------- */
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+      animation: df-card-in var(--dur-slow) var(--ease-decelerate) both;
+    }
+    .brand img {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius);
+    }
+    .brand-text { flex: 1; }
+    .brand-title {
+      font-size: 18px;
+      font-weight: 650;
+      letter-spacing: -0.015em;
+    }
+    .brand-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* ---------- 卡片：错开入场 ---------- */
+    .card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px 20px;
+      margin-bottom: 16px;
+      animation: df-card-in var(--dur-slow) var(--ease-decelerate) both;
+      transition: border-color var(--dur) var(--ease-standard);
+    }
+    .card:hover { border-color: var(--border-strong); }
+    .wrap > .card:nth-of-type(1) { animation-delay: 0.03s; }
+    .wrap > .card:nth-of-type(2) { animation-delay: 0.06s; }
+    .wrap > .card:nth-of-type(3) { animation-delay: 0.09s; }
+    .wrap > .card:nth-of-type(4) { animation-delay: 0.12s; }
+    .wrap > .card:nth-of-type(5) { animation-delay: 0.15s; }
+    .wrap > .card:nth-of-type(6) { animation-delay: 0.18s; }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .card-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* ---------- 工具栏 ---------- */
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .toolbar label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .spacer { flex: 1; }
+
+    /* ---------- 输入 / 按钮 ---------- */
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea {
+      font-family: inherit;
+      font-size: 12px;
+      padding: 6px 8px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text);
+      transition:
+        border-color var(--dur) var(--ease-standard),
+        box-shadow var(--dur) var(--ease-standard),
+        background-color var(--dur-fast) var(--ease-standard);
+    }
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus,
+    textarea:focus {
+      outline: none;
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px var(--brand-soft);
+    }
+    textarea {
+      width: 100%;
+      font-family: var(--mono);
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    button {
+      font-family: inherit;
+      font-size: 12px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg);
+      color: var(--text);
+      border-radius: var(--radius-sm);
+      padding: 6px 12px;
+      cursor: pointer;
+      transition:
+        background-color var(--dur-fast) var(--ease-standard),
+        border-color var(--dur-fast) var(--ease-standard),
+        color var(--dur-fast) var(--ease-standard),
+        transform 120ms var(--ease-standard),
+        box-shadow var(--dur-fast) var(--ease-standard);
+    }
+    button:hover:not(:disabled) {
+      background: var(--bg-hover);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    button:active:not(:disabled) { transform: scale(0.97); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #fff;
+      font-weight: 500;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--brand-hover);
+      border-color: var(--brand-hover);
+      box-shadow: 0 2px 8px rgba(46,91,255,0.25);
+    }
+    .btn-danger {
+      color: var(--danger);
+      border-color: transparent;
+      background: transparent;
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: var(--danger-soft);
+      border-color: var(--danger);
+    }
+
+    /* ---------- 表格 ---------- */
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      animation: df-fade-in var(--dur-slow) var(--ease-decelerate) both;
+      transition: border-color var(--dur) var(--ease-standard);
+    }
+    .table-wrap:hover { border-color: var(--border-strong); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th, td {
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--border);
+      transition: background-color var(--dur-fast) var(--ease-standard);
+    }
+    th {
+      background: var(--bg-subtle);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    tbody tr { transition: background-color var(--dur-fast) var(--ease-standard); }
+    tbody tr:hover { background: var(--bg-subtle); }
+    tbody tr:last-child td { border-bottom: none; }
+    td.empty {
+      text-align: center;
+      color: var(--text-faint);
+      padding: 32px 10px;
+      font-style: italic;
+    }
+
+    .url { max-width: 420px; word-break: break-all; }
+    .mono {
+      font-family: var(--mono);
+      font-size: 11px;
+      word-break: break-all;
+    }
+    .muted { color: var(--text-muted); }
+    .hint { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+
+    /* ---------- 详情展开 ---------- */
+    details summary {
+      cursor: pointer;
+      color: var(--brand);
+      font-size: 12px;
+      user-select: none;
+      list-style: none;
+      transition: color var(--dur-fast) var(--ease-standard);
+    }
+    details summary:hover { color: var(--brand-hover); }
+    details summary::-webkit-details-marker { display: none; }
+    details summary::before {
+      content: '▸';
+      display: inline-block;
+      margin-right: 4px;
+      transition: transform var(--dur) var(--ease-standard);
+    }
+    details[open] summary::before { transform: rotate(90deg); }
+
+    pre {
+      margin: 6px 0 0;
+      padding: 10px 12px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 260px;
+      overflow: auto;
+      animation: df-slide-down var(--dur) var(--ease-decelerate) both;
+    }
+    details:not([open]) > pre { animation: none; }
+
+    /* ---------- 徽章 ---------- */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+      transition:
+        background-color var(--dur) var(--ease-standard),
+        color var(--dur) var(--ease-standard);
+    }
+    .badge.on  { background: var(--ok-soft); color: var(--ok); }
+    .badge.off { background: var(--bg-hover); color: var(--text-muted); }
+
+    .row-actions {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .row-actions button {
+      padding: 3px 8px;
+      font-size: 11px;
+    }
+
+    /* ---------- 预算网格 ---------- */
+    .budget-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .budget-grid label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .budget-grid input { width: 100%; }
+
+    /* ---------- 规则集列表 ---------- */
+    .ruleset-item {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 10px 12px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition:
+        border-color var(--dur) var(--ease-standard),
+        background-color var(--dur-fast) var(--ease-standard),
+        transform var(--dur-fast) var(--ease-standard);
+    }
+    .ruleset-item:hover {
+      border-color: var(--border-strong);
+      transform: translateY(-1px);
+    }
+    .ruleset-item:active { transform: translateY(0); }
+    .ruleset-item input[type="checkbox"] {
+      margin: 3px 0 0;
+      accent-color: var(--brand);
+    }
+    .ruleset-name { font-size: 13px; font-weight: 500; }
+    .ruleset-desc { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+
+    /* ---------- 进度条 ---------- */
+    progress {
+      width: 100%;
+      height: 8px;
+      border: none;
+      border-radius: 4px;
+      overflow: hidden;
+      background: var(--bg-hover);
+      appearance: none;
+    }
+    progress::-webkit-progress-bar {
+      background: var(--bg-hover);
+      border-radius: 4px;
+    }
+    progress::-webkit-progress-value {
+      background: var(--brand);
+      border-radius: 4px;
+      transition: width 280ms var(--ease-standard);
+    }
+    progress::-moz-progress-bar {            /* Firefox */
+      background: var(--brand);
+      border-radius: 4px;
+    }
+
+    /* ---------- 恢复横幅 ---------- */
+    #resume-banner {
+      display: none;
+      background: var(--warn-soft);
+      border: 1px solid var(--warn);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      animation:
+        df-slide-down var(--dur-slow) var(--ease-decelerate) both,
+        df-pulse-warn 2.4s var(--ease-standard) 0.4s 2;
+    }
+    #resume-banner .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    /* ---------- 标签 ---------- */
+    .tag {
+      display: inline-block;
+      padding: 0 5px;
+      border-radius: 3px;
+      font-size: 10px;
+      background: var(--brand-soft);
+      color: var(--brand);
+      font-weight: 500;
+      vertical-align: middle;
+    }
+
+    /* ---------- 状态文字 ---------- */
+    .count {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+      transition: color var(--dur-fast) var(--ease-standard);
+    }
+    .msg {
+      font-size: 12px;
+      color: var(--text-muted);
+      transition: color var(--dur) var(--ease-standard);
+    }
+    .msg.error { color: var(--danger); }
+    .msg.ok { color: var(--ok); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="brand">
+      <img src="icons/icon48.png" alt="">
+      <div class="brand-text">
+        <div class="brand-title">Domain Firewall</div>
+        <div class="brand-sub">日志 · 拾取 · 预算 · 规则集 · 自定义规则</div>
+      </div>
+    </header>
+
+    <!-- ================= 日志 ================= -->
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">日志</div>
+          <div class="card-subtitle">记录模式下捕获的请求</div>
+        </div>
+        <span id="count" class="count"></span>
+      </div>
+      <div class="toolbar">
+        <input type="text" id="filter" placeholder="过滤 URL 或域名" style="flex:1;min-width:200px">
+        <select id="type-filter">
+          <option value="">全部类型</option>
+          <option value="main_frame">main_frame</option>
+          <option value="sub_frame">sub_frame</option>
+          <option value="script">script</option>
+          <option value="stylesheet">stylesheet</option>
+          <option value="image">image</option>
+          <option value="xmlhttprequest">xmlhttprequest</option>
+          <option value="media">media</option>
+          <option value="font">font</option>
+          <option value="websocket">websocket</option>
+          <option value="other">other</option>
+        </select>
+        <button id="refresh">刷新</button>
+        <button id="export">导出 JSON</button>
+        <button id="clear" class="btn-danger">清空</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:150px">时间</th>
+              <th style="width:60px">方法</th>
+              <th style="width:110px">类型</th>
+              <th style="width:70px">状态</th>
+              <th>URL</th>
+              <th style="width:70px">详情</th>
+            </tr>
+          </thead>
+          <tbody id="log-body">
+            <tr><td colspan="6" class="empty">暂无日志</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= 元素拾取 ================= -->
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">元素拾取记录</div>
+          <div class="card-subtitle">按站点生效，可撤销或重新拦截</div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:150px">时间</th>
+              <th style="width:160px">站点</th>
+              <th>选择器</th>
+              <th>网络拦截 URL</th>
+              <th style="width:110px">剩余</th>
+              <th style="width:70px">状态</th>
+              <th style="width:150px">操作</th>
+            </tr>
+          </thead>
+          <tbody id="picker-body">
+            <tr><td colspan="7" class="empty">暂无拾取记录</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= 预算 ================= -->
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">预算份额</div>
+          <div class="card-subtitle">高级设置 · 修改后账本将重建</div>
+        </div>
+      </div>
+      <div class="budget-grid">
+        <label>CORE %<input type="number" id="share-CORE"      min="0" max="100" step="1"></label>
+        <label>CUSTOM %<input type="number" id="share-CUSTOM"    min="0" max="100" step="1"></label>
+        <label>TRANSIENT %<input type="number" id="share-TRANSIENT" min="0" max="100" step="1"></label>
+        <label>RESERVE %<input type="number" id="share-RESERVE"   min="5" max="100" step="1"></label>
+      </div>
+      <div class="toolbar">
+        <button id="save-budget" class="btn-primary">保存份额</button>
+        <button id="reset-budget">恢复默认</button>
+        <span id="budget-total" class="count"></span>
+      </div>
+      <details>
+        <summary>当前账本快照</summary>
+        <pre id="budget-snapshot" class="mono"></pre>
+      </details>
+    </section>
+
+    <!-- ================= TTL ================= -->
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">TRANSIENT 规则 TTL</div>
+          <div class="card-subtitle">拾取生成的网络拦截有效期</div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <label>有效期（小时）
+          <input type="number" id="ttl-hours" min="0.02" max="720" step="0.5" style="width:90px">
+        </label>
+        <button id="save-ttl" class="btn-primary">保存</button>
+        <button id="sweep-now">立即清理过期规则</button>
+        <span id="ttl-status" class="msg"></span>
+      </div>
+      <div class="hint">过期后自动释放网络拦截规则（最多 5 分钟内生效）；元素隐藏不受影响。修改 TTL 只影响之后新建的规则。</div>
+    </section>
+
+    <!-- ================= 规则集 ================= -->
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">广告过滤规则集</div>
+          <div class="card-subtitle">随扩展发版更新 · 切换后立即生效</div>
+        </div>
+      </div>
+      <div id="ruleset-list"></div>
+    </section>
+
+    <!-- ================= 自定义规则 ================= -->
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">自定义过滤规则</div>
+          <div class="card-subtitle">支持 EasyList 语法，单批最多 500 行</div>
+        </div>
+      </div>
+
+      <div id="resume-banner">
+        <strong>有上次未完成的批次</strong>
+        <span id="resume-detail" class="muted" style="margin-left:6px"></span>
+        <div class="actions">
+          <button id="resume-btn" class="btn-primary">恢复</button>
+          <button id="discard-btn">丢弃</button>
+        </div>
+      </div>
+
+      <textarea id="custom-rule-input" rows="6" placeholder="每行一条 EasyList 规则，例如：
+||ads.example.com^$third-party
+@@||cdn.example.com^
+! 以 ! 开头的是注释，会被忽略"></textarea>
+
+      <div id="custom-progress" style="display:none;margin-top:10px">
+        <progress id="custom-progress-bar" value="0" max="100"></progress>
+      </div>
+
+      <div class="toolbar" style="margin-top:10px">
+        <label><input type="checkbox" id="atomic-mode" style="accent-color:var(--brand)"> 原子模式（任一行失败则整批回滚）</label>
+        <div class="spacer"></div>
+        <span id="custom-rule-msg" class="msg"></span>
+        <button id="add-custom-batch" class="btn-primary">批量导入</button>
+        <button id="custom-cancel" class="btn-danger" style="display:none">取消</button>
+      </div>
+
+      <details id="custom-result-details" style="display:none;margin-top:10px">
+        <summary>上次导入结果</summary>
+        <pre id="custom-result-pre"></pre>
+      </details>
+
+      <div class="card-header" style="margin-top:20px;margin-bottom:8px">
+        <div class="card-title" style="font-size:13px">批次</div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:180px">时间</th>
+              <th style="width:70px">总行数</th>
+              <th style="width:70px">成功</th>
+              <th style="width:70px">去重</th>
+              <th style="width:80px">转换失败</th>
+              <th style="width:80px">预算拒绝</th>
+              <th style="width:110px">操作</th>
+            </tr>
+          </thead>
+          <tbody id="custom-batch-body">
+            <tr><td colspan="7" class="empty">暂无批次</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card-header" style="margin-top:20px;margin-bottom:8px">
+        <div class="card-title" style="font-size:13px">规则明细</div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:150px">时间</th>
+              <th>规则文本</th>
+              <th style="width:100px">DNR 规则数</th>
+              <th style="width:90px">状态</th>
+              <th style="width:80px">操作</th>
+            </tr>
+          </thead>
+          <tbody id="custom-rule-body">
+            <tr><td colspan="5" class="empty">暂无自定义规则</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="hint">$replace、$jsonprune、$popup 等 MV3 不可表达的规则会被拒绝并记入失败清单。</div>
+    </section>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "Domain Firewall",
+  "version": "2.5",
+  "description": "仅允许页面自身站点（含子域名）及白名单通信；支持记录模式、元素拾取、规则预算管理、广告规则集与自定义规则批量导入。",
+
+  "permissions": [
+    "declarativeNetRequest",
+    "tabs",
+    "storage",
+    "webRequest",
+    "unlimitedStorage",
+    "alarms"
+  ],
+
+  "host_permissions": [
+    "<all_urls>"
+  ],
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "easylist",
+        "enabled": true,
+        "path": "rules/easylist.json"
+      },
+      {
+        "id": "adguard-base",
+        "enabled": false,
+        "path": "rules/adguard-base.json"
+      }
+    ]
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Domain Firewall",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}

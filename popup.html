@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Domain Firewall</title>
+  <style>
+    :root {
+      --brand: #2E5BFF;
+      --brand-hover: #1E48E0;
+      --brand-soft: #E8EDFF;
+      --danger: #E53935;
+      --danger-soft: #FFEBEE;
+      --ok: #2E7D32;
+      --ok-soft: #E8F5E9;
+      --warn: #FB8C00;
+      --warn-soft: #FFF3E0;
+
+      --bg: #FFFFFF;
+      --bg-subtle: #F7F8FA;
+      --bg-hover: #F0F2F5;
+      --border: #E1E4E8;
+      --border-strong: #C8CDD4;
+
+      --text: #1F2328;
+      --text-muted: #6B7280;
+      --text-faint: #9CA3AF;
+
+      --radius-sm: 4px;
+      --radius: 6px;
+      --radius-lg: 10px;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+      --shadow: 0 2px 8px rgba(0,0,0,0.08);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+      /* 缓动 */
+      --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+      --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+      --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
+      --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+      --dur-fast: 150ms;
+      --dur: 220ms;
+      --dur-slow: 320ms;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --brand: #5B7FFF;
+        --brand-hover: #7393FF;
+        --brand-soft: #1A2456;
+        --danger: #FF5C57;
+        --danger-soft: #3A1A1A;
+        --ok: #66BB6A;
+        --ok-soft: #1A3A1C;
+        --warn: #FFA726;
+        --warn-soft: #3A2A0A;
+
+        --bg: #1A1D21;
+        --bg-subtle: #23272E;
+        --bg-hover: #2C323A;
+        --border: #353B45;
+        --border-strong: #4A5058;
+
+        --text: #E6E8EB;
+        --text-muted: #9BA3AE;
+        --text-faint: #6B7280;
+
+        --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+        --shadow: 0 2px 8px rgba(0,0,0,0.4);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* ---------- 关键帧 ---------- */
+    @keyframes df-fade-up {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes df-item-in {
+      from { opacity: 0; transform: translateX(-4px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      width: 340px;
+      font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* ---------- 品牌头 ---------- */
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-subtle);
+      animation: df-fade-up var(--dur-slow) var(--ease-decelerate) both;
+    }
+    .brand img {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      flex-shrink: 0;
+    }
+    .brand-title {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    /* ---------- 主体：错开入场 ---------- */
+    .body { padding: 12px 14px 14px; }
+    .body > * {
+      animation: df-fade-up var(--dur-slow) var(--ease-decelerate) both;
+    }
+    .body > :nth-child(1) { animation-delay: 0.04s; } /* status */
+    .body > :nth-child(2) { animation-delay: 0.07s; } /* domain-row */
+    .body > :nth-child(3) { animation-delay: 0.10s; } /* section: mode */
+    .body > :nth-child(4) { animation-delay: 0.13s; } /* section: advanced */
+    .body > :nth-child(5) { animation-delay: 0.16s; } /* section: pick */
+    .body > :nth-child(7) { animation-delay: 0.19s; } /* section: whitelist */
+    .body > :nth-child(9) { animation-delay: 0.22s; } /* button: options */
+
+    /* ---------- 状态条 ---------- */
+    .status {
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      font-size: 12px;
+      margin-bottom: 12px;
+      border: 1px solid transparent;
+      transition:
+        background-color var(--dur) var(--ease-standard),
+        color var(--dur) var(--ease-standard),
+        border-color var(--dur) var(--ease-standard);
+    }
+    .status.block  { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+    .status.record { background: var(--brand-soft);  color: var(--brand);  border-color: var(--brand); }
+    .status.off    { background: var(--bg-subtle);   color: var(--text-muted); border-color: var(--border); }
+
+    /* ---------- 当前域名 ---------- */
+    .domain-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 12px;
+      transition: border-color var(--dur) var(--ease-standard);
+    }
+    .domain-row:hover { border-color: var(--border-strong); }
+    .domain-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      flex-shrink: 0;
+    }
+    .domain {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 500;
+      word-break: break-all;
+      color: var(--text);
+    }
+
+    /* ---------- 区块标题 ---------- */
+    .section { margin-bottom: 12px; }
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    /* ---------- 模式分段控件（含滑动指示） ---------- */
+    .mode-group {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 2px;
+      padding: 3px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    /* 滑块：默认定位在第一个格子，通过 :has 平滑移动 */
+    .mode-group::before {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: calc((100% - 6px) / 3);
+      height: calc(100% - 6px);
+      background: var(--bg);
+      border-radius: var(--radius-sm);
+      box-shadow: var(--shadow-sm);
+      pointer-events: none;
+      opacity: 0;
+      transform: translateX(0);
+      transition:
+        transform var(--dur) var(--ease-standard),
+        opacity var(--dur-fast) var(--ease-standard);
+    }
+    .mode-group:has(input:checked)::before { opacity: 1; }
+    .mode-group:has(input[value="block"]:checked)::before   { transform: translateX(0); }
+    .mode-group:has(input[value="record"]:checked)::before  { transform: translateX(calc(100% + 2px)); }
+    .mode-group:has(input[value="off"]:checked)::before     { transform: translateX(calc(200% + 4px)); }
+
+    .mode-group label { position: relative; display: block; z-index: 1; }
+    .mode-group input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+    }
+    .mode-group span {
+      display: block;
+      padding: 7px 0;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      user-select: none;
+      transition: color var(--dur) var(--ease-standard);
+    }
+    .mode-group span:hover { color: var(--text); }
+    .mode-group input:checked + span {
+      color: var(--text);
+      font-weight: 600;
+    }
+    .mode-group label:nth-child(1) input:checked + span { color: var(--danger); }
+    .mode-group label:nth-child(2) input:checked + span { color: var(--brand); }
+
+    /* ---------- Switch 开关 ---------- */
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 10px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: border-color var(--dur) var(--ease-standard);
+    }
+    .switch-row:hover { border-color: var(--border-strong); }
+    .switch-text { flex: 1; min-width: 0; }
+    .switch-title { font-size: 12px; font-weight: 500; }
+    .switch-desc { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 34px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .switch input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .switch-track {
+      position: absolute;
+      inset: 0;
+      background: var(--border-strong);
+      border-radius: 20px;
+      transition: background-color var(--dur) var(--ease-standard);
+    }
+    .switch-track::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      background: #fff;
+      border-radius: 50%;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+      transition: transform var(--dur) var(--ease-spring);
+    }
+    .switch input:checked + .switch-track { background: var(--brand); }
+    .switch input:checked + .switch-track::after { transform: translateX(14px); }
+
+    /* ---------- 按钮 ---------- */
+    button {
+      font-family: inherit;
+      font-size: 12px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg);
+      color: var(--text);
+      border-radius: var(--radius-sm);
+      padding: 6px 10px;
+      cursor: pointer;
+      transition:
+        background-color var(--dur-fast) var(--ease-standard),
+        border-color var(--dur-fast) var(--ease-standard),
+        color var(--dur-fast) var(--ease-standard),
+        transform 120ms var(--ease-standard),
+        box-shadow var(--dur-fast) var(--ease-standard);
+    }
+    button:hover:not(:disabled) {
+      background: var(--bg-hover);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    button:active:not(:disabled) { transform: scale(0.97); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #fff;
+      font-weight: 500;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--brand-hover);
+      border-color: var(--brand-hover);
+      box-shadow: 0 2px 8px rgba(46,91,255,0.25);
+    }
+    .btn-block { display: block; width: 100%; padding: 8px 12px; font-size: 13px; }
+
+    /* ---------- 拾取按钮图标 ---------- */
+    .btn-with-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .btn-with-icon svg {
+      width: 14px;
+      height: 14px;
+      transition: transform var(--dur) var(--ease-standard);
+    }
+    .btn-with-icon:hover:not(:disabled) svg {
+      transform: rotate(90deg);
+    }
+
+    /* ---------- 白名单 ---------- */
+    .whitelist {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 6px;
+      max-height: 140px;
+      overflow-y: auto;
+    }
+    .whitelist-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 5px 8px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      animation: df-item-in 200ms var(--ease-decelerate) both;
+      transition:
+        border-color var(--dur-fast) var(--ease-standard),
+        background-color var(--dur-fast) var(--ease-standard);
+    }
+    .whitelist-item:hover {
+      border-color: var(--border-strong);
+      background: var(--bg-hover);
+    }
+    /* 瀑布式入场：最多给前 8 项错开 */
+    .whitelist-item:nth-child(1) { animation-delay: 0ms; }
+    .whitelist-item:nth-child(2) { animation-delay: 25ms; }
+    .whitelist-item:nth-child(3) { animation-delay: 50ms; }
+    .whitelist-item:nth-child(4) { animation-delay: 75ms; }
+    .whitelist-item:nth-child(5) { animation-delay: 100ms; }
+    .whitelist-item:nth-child(6) { animation-delay: 125ms; }
+    .whitelist-item:nth-child(7) { animation-delay: 150ms; }
+    .whitelist-item:nth-child(n+8) { animation-delay: 175ms; }
+
+    .whitelist-item span {
+      font-family: var(--mono);
+      word-break: break-all;
+      min-width: 0;
+    }
+    .whitelist-item button {
+      flex-shrink: 0;
+      padding: 2px 6px;
+      font-size: 11px;
+      color: var(--danger);
+      border-color: transparent;
+      background: transparent;
+    }
+    .whitelist-item button:hover {
+      background: var(--danger-soft);
+      border-color: var(--danger);
+    }
+
+    .add-row {
+      display: flex;
+      gap: 6px;
+    }
+    .add-row input { flex: 1; min-width: 0; }
+
+    /* ---------- 输入框 ---------- */
+    input[type="text"] {
+      font-family: inherit;
+      font-size: 12px;
+      padding: 6px 8px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text);
+      transition:
+        border-color var(--dur) var(--ease-standard),
+        box-shadow var(--dur) var(--ease-standard);
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px var(--brand-soft);
+    }
+    input[type="text"]::placeholder { color: var(--text-faint); }
+
+    /* ---------- 提示 ---------- */
+    .hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 2px 0;
+    }
+
+    /* ---------- 分隔 ---------- */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 12px 0;
+      opacity: 0;
+      animation: df-fade-up var(--dur) var(--ease-decelerate) 0.18s both;
+    }
+  
+    /* ---------- 页内提示 / 权限提示（替代 alert） ---------- */
+    [hidden] { display: none !important; }
+    .notice {
+      margin-bottom: 10px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-line;
+    }
+    .notice.error { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+    .notice.info  { background: var(--brand-soft);  color: var(--brand);  border-color: var(--brand); }
+    .host-warning {
+      margin-bottom: 10px;
+      padding: 10px;
+      border-radius: var(--radius);
+      background: var(--warn-soft);
+      border: 1px solid var(--warn);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .host-warning-title { font-weight: 600; margin-bottom: 4px; }
+    .host-warning button { margin: 8px 0 4px; }
+  </style>
+</head>
+<body>
+  <header class="brand">
+    <img src="icons/icon32.png" alt="">
+    <div class="brand-title">Domain Firewall</div>
+  </header>
+
+  <div class="body">
+    <div id="status" class="status">加载中…</div>
+
+    <div id="notice" class="notice" hidden role="alert"></div>
+    <div id="host-warning" class="host-warning" hidden>
+      <div class="host-warning-title">未授予「所有网站」访问权限</div>
+      <div>拦截本身不受影响，但<b>记录模式</b>和<b>元素拾取</b>需要此权限。</div>
+      <button id="grant-host" class="btn-block">授予权限</button>
+      <div class="hint">若点击无效：Chrome / Edge / Opera 到「扩展管理 → 详情 → 网站访问权限」选“在所有网站上”；Firefox 到 about:addons → 本扩展 → 权限，开启“访问所有网站的数据”。</div>
+    </div>
+
+    <div class="domain-row">
+      <span class="domain-label">当前</span>
+      <span id="current-domain" class="domain">-</span>
+    </div>
+
+    <div class="section">
+      <div class="section-title">模式</div>
+      <div class="mode-group">
+        <label><input type="radio" name="mode" value="block"><span>拦截</span></label>
+        <label><input type="radio" name="mode" value="record"><span>记录</span></label>
+        <label><input type="radio" name="mode" value="off"><span>关闭</span></label>
+      </div>
+    </div>
+
+    <div class="section">
+      <label class="switch-row">
+        <div class="switch-text">
+          <div class="switch-title">高级模式</div>
+          <div class="switch-desc">拾取时可生成网络拦截规则</div>
+        </div>
+        <span class="switch">
+          <input type="checkbox" id="advanced-mode">
+          <span class="switch-track"></span>
+        </span>
+      </label>
+    </div>
+
+    <div class="section">
+      <button id="pick-element" class="btn-primary btn-block btn-with-icon">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="8" cy="8" r="5.5"/>
+          <line x1="8" y1="3" x2="8" y2="13"/>
+          <line x1="3" y1="8" x2="13" y2="8"/>
+        </svg>
+        拾取页面元素并隐藏
+      </button>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="section">
+      <div class="section-title">白名单</div>
+      <div id="whitelist" class="whitelist"></div>
+      <div class="add-row">
+        <input type="text" id="new-whitelist" placeholder="cdn.example.com">
+        <button id="add-whitelist">添加</button>
+      </div>
+      <div class="hint" style="margin-top:4px">按所填域名生效：example.com 含全部子域名，cdn.example.com 仅含自身及其子域名</div>
+    </div>
+
+    <div class="divider"></div>
+
+    <button id="open-options" class="btn-block">查看日志 · 拾取记录 · 预算</button>
+  </div>
+
+  <script src="psl.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
