@@ -78,7 +78,7 @@ Domain Firewall 反过来——它是**白名单**：
 内置 EasyList / AdGuard Base 两个静态规则集。设置页支持**批量导入 EasyList 语法规则**，逐行转换、跨批次去重、预算准入、可中断、可恢复。
 
 ### 🌐 跨浏览器
-Chrome / Edge / Opera 用 service worker，Firefox 用事件页。同一套源码，四个浏览器分别打包。
+Chrome / Edge / Opera 使用 service worker，Firefox 使用事件页。同一套源码，按浏览器分别打包：Chrome / Edge / Opera 三个包内容相同，Firefox 使用独立的 manifest。
 
 ---
 
@@ -87,8 +87,8 @@ Chrome / Edge / Opera 用 service worker，Firefox 用事件页。同一套源�
 | 浏览器 | 最低版本 | 说明 |
 |---|---|---|
 | Chrome | 121+ | 主开发目标，端到端测试过 |
-| Edge | 121+ | 与 Chrome 共用同一份包，未实机测试 |
-| Opera | 100+ | 与 Chrome 共用同一份包，未实机测试 |
+| Edge | 121+ | 包内容与 Chrome 相同，未实机测试 |
+| Opera | 100+ | 包内容与 Chrome 相同，未实机测试 |
 | Firefox | 140+ | 使用事件页 + 独立 manifest，未实机测试 |
 
 为什么 Chrome 要 121+：动态规则上限从 120 的 5,000 提升到 121 的 30,000，预算管理按 30k 计算。
@@ -103,7 +103,7 @@ Chrome / Edge / Opera 用 service worker，Firefox 用事件页。同一套源�
 2. 解压到固定位置（**不要移动**，浏览器会一直从这里读）；
 3. Chrome：地址栏输入 `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选 `extension/` 文件夹；
 4. Edge / Opera 类似：`edge://extensions` / `opera://extensions`；
-5. Firefox：见整包内 `INSTALL.txt`（需要 Mozilla 签名的 `.xpi`，或临时载入）。
+5. Firefox：Firefox 正式版只能安装经 Mozilla 签名的 `.xpi`，详见整包内 `INSTALL.txt`。如果只是临时试用，可在 `about:debugging` → 「此 Firefox」→「临时载入附加组件」中选择包内的 `manifest.json`，但**重启浏览器后会失效**。
 
 ### 方式二：从源码构建
 
@@ -138,7 +138,7 @@ domain-firewall/
 ├── scripts/               构建脚本
 ├── filters/               原始过滤列表（不提交）
 └── rules/                 静态规则集（构建产物）
-
+```
 
 **核心设计：**
 
@@ -176,12 +176,10 @@ domain-firewall/
 
 本项目采用 **GNU General Public License v3.0** 授权。
 
-之所以选 GPLv3，是因为本项目依赖 `@adguard/dnr-converter`（GPLv3），按 GPLv3 的传染条款，整体分发必须采用兼容许可证。
+之所以选 GPLv3，是因为本项目依赖 `@adguard/dnr-converter`（GPLv3），按 GPLv3 的传染条款，整体分发必须采用兼容许可证。分发本项目（含修改版）时，需同样以 GPLv3 提供对应源码。
 
 - 完整许可证文本见 [LICENSE](LICENSE)；
 - 上游版权声明请参见 `node_modules/@adguard/dnr-converter/LICENSE`。
-
-**本项目仅供个人学习和非商业使用。**
 
 ---
 
